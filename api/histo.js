@@ -123,7 +123,12 @@ async function filiation(refBrute) {
 
       const age = d.annee != null ? anneeCourante - d.annee : null;
 
+      // décision du 02/10/2026 : un REMEMBREMENT (nature 4) est un TERMINUS —
+      // origine de propriété qui se suffit à elle-même, pas d'alerte, on ne remonte pas au-delà
+      const terminus = d.nature === 4;
+
       maillons.push({
+        terminus,
         parcelle: { ...p, libelle: libelle(p),
                     contenance_m2: filles.find((x) => cle(x) === k)?.contenance_m2 ?? null },
         document: {
@@ -145,6 +150,7 @@ async function filiation(refBrute) {
         profondeur: p.profondeur,
       });
 
+      if (terminus) continue;
       for (const m of meres) {
         aTraiter.push({ dep: m.dep, com: m.com, prefixe: m.prefixe,
                         section: m.section, numero: m.numero, profondeur: p.profondeur + 1 });

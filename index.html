@@ -8,6 +8,7 @@
 <title>HISTO — historique cadastral</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://connexion-omega.vercel.app/acces.js"></script>
 <style>
 /* ---------- Charte FIDAL v2.2 ---------- */
 :root{
@@ -79,35 +80,40 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 .pastille.vert{background:var(--vert)}.pastille.jaune{background:var(--jaune-texte)}.pastille.orange{background:var(--orange)}
 .rien{padding:12px 14px;background:#FFF9E0;border-left:4px solid var(--jaune-texte);border-radius:3px}
 
-/* ===== ÉTAGE 1 : l'arbre, de GAUCHE (parcelle actuelle) à DROITE (passé) ===== */
-.arbre{overflow-x:auto;padding:6px 0 10px}
-.noeud{display:flex;align-items:center}
-.boite{flex:none;background:#fff;border:1px solid var(--trait);border-radius:4px;padding:6px 12px;min-width:120px}
+/* ===== ÉTAGE 1 : la FRISE CHRONOLOGIQUE — parcelle actuelle à gauche, le passé vers la droite ===== */
+.frise{position:relative;overflow-x:auto;padding:0 0 10px}
+.frise .colonnes{display:flex;align-items:stretch;min-width:max-content}
+.frise .colonne{position:relative;display:flex;flex-direction:column;gap:14px;padding:50px 22px 16px;min-width:150px}
+/* fonds de période : une teinte claire différente par époque, distincte des couleurs de fiabilité */
+.frise .colonne.p0{background:#EEF4F8}.frise .colonne.p1{background:#F3EFF7}.frise .colonne.p2{background:#EDF6F0}.frise .colonne.p3{background:#F8F1EA}
+.frise .colonne.ancien{box-shadow:inset 0 3px 0 0 var(--nuit)}
+.frise .epoque{position:absolute;top:8px;left:0;right:0;text-align:center;font-family:Georgia,serif;font-size:.85rem;color:var(--nuit)}
+.frise .epoque small{display:block;font-family:"Segoe UI",system-ui,sans-serif;font-size:.7rem;color:#5B6B7B}
+.boite{position:relative;z-index:2;background:#fff;border:2px solid var(--trait);border-radius:4px;padding:6px 12px;min-width:120px}
 .boite .ref{font-family:Georgia,serif;color:var(--nuit);font-size:1.05rem;white-space:nowrap}
+.boite .ref small{font-family:"Segoe UI",system-ui,sans-serif;font-size:.78rem;color:#5B6B7B;margin-right:5px}
 .boite .surf{display:block;margin:0;font-size:.82rem;color:#5B6B7B}
-.boite.actuelle{border-color:var(--nuit);border-width:2px}
-.boite.terminus{background:var(--gris);border-style:dashed}
-.boite .terme{display:block;font-size:.78rem;color:var(--nuit);margin-top:2px}
-.enfants{display:flex;flex-direction:column;gap:8px;padding-left:28px;position:relative}
-/* la BRANCHE porte la couleur de fiabilité : vert / jaune / orange */
-.branche{position:relative;display:flex;align-items:center}
-.branche::before{content:"";position:absolute;left:-28px;width:28px;height:4px;top:calc(50% - 2px);background:var(--vert)}
-.branche.jaune::before{background:var(--jaune-texte)}
-.branche.orange::before{background:var(--orange)}
-.branche.ancien::before{background:repeating-linear-gradient(90deg,var(--nuit) 0 4px,#fff 4px 8px)} /* traverse les 30 ans : damier */
-.branche .num{position:absolute;left:-26px;top:calc(50% - 20px);font-size:.75rem;color:#5B6B7B;background:var(--papier);padding:0 3px}
-.legende-arbre{font-size:.82rem;color:#5B6B7B;margin:4px 0 14px}
-.legende-arbre i{display:inline-block;width:22px;height:4px;vertical-align:middle;margin:0 6px 0 10px}
+.boite.actuelle{border-color:var(--nuit);border-width:3px}
+/* couleur du nœud = la plus grave de ses branches */
+.boite.jaune{border-color:var(--jaune-texte)}.boite.orange{border-color:var(--orange)}.boite.vert{border-color:var(--vert)}
+.frise svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+.frise svg path{fill:none;stroke-width:3}
+.frise svg .vert{stroke:var(--vert)}.frise svg .jaune{stroke:var(--jaune-texte)}.frise svg .orange{stroke:var(--orange)}
+.frise svg .ancien{stroke-dasharray:6 5}   /* le trait traverse les trente ans */
+.frise svg text{font:600 .75rem "Segoe UI",system-ui,sans-serif;fill:var(--nuit);paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}
+.legende-arbre{font-size:.82rem;color:#5B6B7B;margin:6px 0 14px}
+.legende-arbre i{display:inline-block;width:22px;height:3px;vertical-align:middle;margin:0 6px 0 10px}
 
 /* ===== ÉTAGE 2 : le tableau, une ligne par mouvement, numérotation incrémentale ===== */
+.tableau{overflow-x:auto}
 table.mvts{width:100%;border-collapse:collapse;font-size:.9rem}
+table.mvts td.parc{white-space:nowrap}
 table.mvts th,table.mvts td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--trait);vertical-align:top}
 table.mvts th{color:#5B6B7B;font-weight:600;white-space:nowrap}
 table.mvts td.n{color:#5B6B7B;width:2.2em}
 table.mvts tr.jaune td:first-child{box-shadow:inset 4px 0 0 var(--jaune-texte)}
 table.mvts tr.vert td:first-child{box-shadow:inset 4px 0 0 var(--vert)}
 table.mvts tr.orange td:first-child{box-shadow:inset 4px 0 0 var(--orange)}
-table.mvts tr.terminus td{background:var(--gris)}
 table.mvts .origines div{white-space:nowrap}          /* mères EN COLONNE */
 table.mvts .soeurs{color:#5B6B7B}
 .surf{color:#5B6B7B;font-size:.9rem;margin-left:6px}
@@ -223,7 +229,13 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
    HISTO — écran d'entrée
    Trois onglets, validation commune, puis appel /api/histo
    ============================================================ */
-const API = "/api/histo";
+/* ---------- paramètres réglables en tête ---------- */
+const DRIVE_DOSSIER_HISTO_ID = "";      // identifiant du dossier « HISTO » du Drive ; vide = recherche par nom dans tout le Drive
+const PREFIXE_FICHIER = "HISTO_";       // HISTO_<dep><com>.json, HISTO_situation.json
+const TOLERANCE_SURFACE_PCT = 4;        // écart de surface signalé au-delà de 4 % (02/10/2026)
+const PLANCHER_SURFACE_M2 = 5;          // … et au-delà de 5 m² (02/10/2026)
+const PROFONDEUR_MAX = 60;
+const LIBELLES_NATURE = { 1:"document d'arpentage", 2:"croquis de conservation", 4:"remaniement", 5:"document d'arpentage numérique", 6:"lotissement numérique", 7:"lotissement", 8:"rénovation" };
 const GEO = "https://geo.api.gouv.fr/communes";              // fichier des communes (comme PAINT)
 const BAN = "https://api-adresse.data.gouv.fr/search/";       // adresses
 const CADASTRE_PT = "https://apicarto.ign.fr/api/cadastre/parcelle"; // parcelles à un point
@@ -239,15 +251,33 @@ document.querySelectorAll(".onglets [role=tab]").forEach(b => b.addEventListener
 }));
 
 /* ---------- état de la base ---------- */
-fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "etat" }) })
-  .then(r => r.json())
-  .then(e => {
-    const d = e.dernier_chargement;
-    document.getElementById("etatbase").textContent = d
-      ? `Base : lot ${d.lot_source}, ${Number(e.mouvements_en_base).toLocaleString("fr-FR")} mouvements`
-      : "Base : aucun chargement";
+/* ---------- accès Drive (autorisation du matin, bibliothèque commune de CONNEXION) ---------- */
+async function jeton() {
+  if (!window.FidalAcces) throw new Error("bibliothèque d'accès indisponible");
+  return await FidalAcces.jeton();
+}
+const cacheFichiers = new Map();
+async function lireFichierDrive(nom) {            // retourne l'objet JSON, ou null si absent
+  if (cacheFichiers.has(nom)) return cacheFichiers.get(nom);
+  const t = await jeton();
+  let q = `name = '${nom}' and trashed = false`;
+  if (DRIVE_DOSSIER_HISTO_ID) q += ` and '${DRIVE_DOSSIER_HISTO_ID}' in parents`;
+  const liste = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=1&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+    { headers: { Authorization: `Bearer ${t}` } }).then(r => r.json());
+  const f = liste.files?.[0];
+  if (!f) { cacheFichiers.set(nom, null); return null; }
+  const contenu = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`,
+    { headers: { Authorization: `Bearer ${t}` } }).then(r => r.json());
+  cacheFichiers.set(nom, contenu);
+  return contenu;
+}
+lireFichierDrive(`${PREFIXE_FICHIER}situation.json`)
+  .then(sit => {
+    document.getElementById("etatbase").textContent = sit
+      ? `Données DGFiP : situation ${sit.situation}, ${Number(sit.communes).toLocaleString("fr-FR")} communes`
+      : "Données : aucune situation chargée sur le Drive";
   })
-  .catch(() => { document.getElementById("etatbase").textContent = "Base : injoignable"; });
+  .catch(() => { document.getElementById("etatbase").textContent = "Données : Drive non connecté — ouvrez MORNING"; });
 
 /* ---------- suggestions de communes (fichier des communes) ---------- */
 function brancherCommune(inputId, listeId, aideId, cle) {
@@ -429,14 +459,115 @@ document.getElementById("btn-lancer").addEventListener("click", async () => {
   const attente = document.getElementById("attente");
   attente.style.display = "block"; cacherErreur();
   try {
-    const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "filiation", references: refs }) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.erreur || r.statusText);
+    const resultats = [];
+    for (const r of refs) resultats.push(await filiation(r));
+    const j = { genere_le: new Date().toISOString(), nb_references: resultats.length, resultats };
     etat.resultats = j;
     afficherResultats(j);
   } catch (e) { montrerErreur("Impossible d'établir la filiation : " + e.message); }
   finally { attente.style.display = "none"; }
 });
+
+/* ============================================================
+   MOTEUR DE FILIATION — dans le navigateur, sur le fichier de la commune
+   (mères et filles appariées PAR LOT D'ANALYSE, descriptif DGFiP)
+   ============================================================ */
+function normRef(ref) {
+  return { dep: String(ref.dep).trim().toUpperCase().padStart(2, "0"), com: String(ref.com).trim().padStart(3, "0"),
+           prefixe: String(ref.prefixe || "").trim().padStart(3, "0") || "000",
+           section: String(ref.section).trim().toUpperCase().replace(/^0+/, "") || "0", numero: String(ref.numero).trim().padStart(4, "0") };
+}
+function cellule(c, dep, com, prefixe) {   // "AC0026" ou " A0007" → référence
+  return { dep, com, prefixe, section: c.slice(0, 2).trim().replace(/^0+/, "") || "0", numero: c.slice(2, 6).trim().padStart(4, "0"), contenance_m2: null };
+}
+function libRef(p) { const pre = p.prefixe && p.prefixe !== "000" ? `${p.prefixe} ` : ""; return `${pre}${p.section} ${String(p.numero).replace(/^0+/, "")}`; }
+
+// contenance de la parcelle actuelle (API cadastre IGN) ; null si introuvable, sans blocage
+async function contenanceActuelle(p) {
+  try {
+    const insee = p.dep.length === 3 ? p.dep + p.com.slice(1) : p.dep + p.com;   // 971 + com → code INSEE sur 5
+    const u = `${CADASTRE_PT}?code_insee=${insee}&section=${encodeURIComponent(p.section.padStart(2, "0"))}&numero=${p.numero}&com_abs=${p.prefixe}`;
+    const j = await fetch(u).then(r => r.json());
+    const c = j.features?.[0]?.properties?.contenance;
+    return c != null ? Number(c) : null;
+  } catch { return null; }
+}
+
+// index d'une commune : clé de parcelle fille → [{doc, lot}]
+const indexCommunes = new Map();
+async function indexCommune(dep, com) {
+  const k = dep + com;
+  if (indexCommunes.has(k)) return indexCommunes.get(k);
+  const fichier = await lireFichierDrive(`${PREFIXE_FICHIER}${dep}${com}.json`);
+  if (!fichier) { indexCommunes.set(k, null); return null; }
+  const parFille = new Map();
+  for (const doc of fichier.docs) for (const lot of doc.lots) {
+    for (const c of lot.f) {
+      const r = cellule(c, dep, com, lot.pre), kk = cleRef(r);
+      if (!parFille.has(kk)) parFille.set(kk, []);
+      parFille.get(kk).push({ doc, lot });
+    }
+  }
+  const idx = { parFille, situation: fichier.situation };
+  indexCommunes.set(k, idx);
+  return idx;
+}
+
+function ecartSurfaces(meres, filles) {
+  const somme = l => l.every(x => x.contenance_m2 != null) ? l.reduce((t, x) => t + x.contenance_m2, 0) : null;
+  const sM = somme(meres), sF = somme(filles);
+  if (sM == null || sF == null || sM === 0) return { verifiable: false, signale: false };
+  const ecart = Math.abs(sM - sF), pct = ecart / sM * 100;
+  return { verifiable: true, somme_meres_m2: sM, somme_filles_m2: sF, ecart_m2: ecart, ecart_pct: Math.round(pct * 100) / 100,
+           signale: pct > TOLERANCE_SURFACE_PCT && ecart > PLANCHER_SURFACE_M2 };
+}
+
+async function filiation(refBrute) {
+  const racine = normRef(refBrute);
+  const anneeCourante = new Date().getFullYear();
+  racine.contenance_m2 = await contenanceActuelle(racine);      // décision du 02/10 midi : parcelle actuelle via l'API cadastre
+  const idx = await indexCommune(racine.dep, racine.com);
+  const maillons = [], vus = new Set();
+  let alerteJaune = false;
+  if (idx) {
+    const aTraiter = [{ ...racine, profondeur: 0 }];
+    while (aTraiter.length) {
+      const p = aTraiter.shift(), k = cleRef(p);
+      if (vus.has(k) || p.profondeur > PROFONDEUR_MAX) continue;
+      vus.add(k);
+      for (const { doc, lot } of (idx.parFille.get(k) || [])) {
+        const meres = lot.m.map(c => cellule(c, p.dep, p.com, lot.pre));
+        const filles = lot.f.map(c => cellule(c, p.dep, p.com, lot.pre));
+        const soeurs = filles.filter(x => cleRef(x) !== k);
+        const surfaces = ecartSurfaces(meres, filles);
+        if (surfaces.signale) alerteJaune = true;
+        const annee = doc.date ? +doc.date.slice(0, 4) : null;
+        maillons.push({
+          parcelle: { ...p, libelle: libRef(p), contenance_m2: p.profondeur === 0 ? racine.contenance_m2 : null },
+          document: { id_dfi: doc.id, lot: lot.lot, nature: doc.nat, nature_libelle: LIBELLES_NATURE[doc.nat] ?? "nature inconnue",
+                      date_effet: doc.date, annee, au_dela_30_ans: annee != null && (anneeCourante - annee) > SEUIL_30_ANS },
+          operation: meres.length > 1 && filles.length === 1 ? "réunion" : meres.length === 1 && filles.length > 1 ? "division"
+                   : meres.length > 1 && filles.length > 1 ? "remaniement parcellaire" : meres.length === 0 ? "extraction du domaine non cadastré" : "renumérotation",
+          parcelles_origine: meres.map(m => ({ ...m, libelle: libRef(m) })),
+          parcelles_soeurs: soeurs.map(s => ({ ...s, libelle: libRef(s) })),
+          surfaces, profondeur: p.profondeur,
+        });
+        for (const m of meres) aTraiter.push({ ...m, profondeur: p.profondeur + 1 });
+      }
+    }
+  }
+  maillons.sort((a, b) => { const da = a.document.date_effet ?? "", db = b.document.date_effet ?? ""; return da !== db ? (da < db ? 1 : -1) : a.profondeur - b.profondeur; });
+  const trouve = maillons.length > 0;
+  const plusAncien = trouve ? maillons.reduce((min, m) => (m.document.annee != null && (min == null || m.document.annee < min)) ? m.document.annee : min, null) : null;
+  return {
+    reference: { ...racine, libelle: libRef(racine) }, trouve,
+    message: trouve ? null : (idx === null
+      ? "Aucune donnée DFI chargée pour cette commune sur le Drive."
+      : "Aucune filiation trouvée dans le DFI pour cette référence (remembrement, mouvement antérieur à l'informatisation, ou parcelle d'origine). Recherches à poursuivre via l'état hypothécaire."),
+    plus_ancien_mouvement: plusAncien, franchit_30_ans: plusAncien != null && (anneeCourante - plusAncien) > SEUIL_30_ANS,
+    alerte: trouve ? (alerteJaune ? "jaune" : "vert") : "jaune", maillons,
+  };
+}
 
 /* ---------- affichage des résultats : du présent vers le passé ---------- */
 function surf(m2) { return m2 == null ? "" : `<span class="surf">${Number(m2).toLocaleString("fr-FR")} m²</span>`; }
@@ -444,6 +575,7 @@ function cleRef(p) { return `${p.dep}-${p.com}-${p.prefixe}-${p.section}-${Strin
 function nomCommune(ref) { const r = etat.refs.find(x => x.dep === ref.dep && x.com === ref.com); return r ? r.communeNom : `${ref.dep} ${ref.com}`; }
 
 function afficherResultats(j) {
+  friseATracer.length = 0;
   const zone = document.getElementById("liste-resultats");
   const anneeCourante = new Date().getFullYear();
   zone.innerHTML = j.resultats.map(res => {
@@ -460,67 +592,97 @@ function afficherResultats(j) {
       return html;
     }
     // numérotation incrémentale des mouvements, partagée par l'arbre et le tableau
-    res.maillons.forEach((m, i) => { m.num = i + 1; m.couleur = m.terminus ? "vert" : (m.surfaces.signale ? "jaune" : "vert"); });
+    res.maillons.forEach((m, i) => { m.num = i + 1; m.couleur = m.surfaces.signale ? "jaune" : "vert"; });
 
-    // ---- étage 1 : l'arbre, parcelle actuelle à gauche, passé vers la droite ----
-    const parFille = new Map();   // clé parcelle fille → maillons où elle naît
-    for (const m of res.maillons) {
-      const k = cleRef(m.parcelle); if (!parFille.has(k)) parFille.set(k, []); parFille.get(k).push(m);
-    }
-    const vus = new Set();
-    function boite(p, classes = "", terme = "") {
-      return `<div class="boite ${classes}"><span class="ref">${p.libelle}</span>${p.contenance_m2 != null ? `<span class="surf">${Number(p.contenance_m2).toLocaleString("fr-FR")} m²</span>` : ""}${terme ? `<span class="terme">${terme}</span>` : ""}</div>`;
-    }
-    function noeud(p, racine = false) {
+    // ---- étage 1 : la FRISE CHRONOLOGIQUE ----
+    // colonnes = aujourd'hui, puis une colonne par année de mouvement (du plus récent au plus ancien)
+    const annees = [...new Set(res.maillons.map(m => m.document.annee ?? "?"))].sort((a, b) => (b === "?" ? -1 : a === "?" ? 1 : b - a));
+    const colonnes = [{ cle: "auj", titre: "aujourd'hui", sous: res.reference.commune_nom || "", noeuds: new Map() }]
+      .concat(annees.map(a => ({ cle: String(a), titre: a === "?" ? "date inconnue" : String(a), sous: "", noeuds: new Map(),
+                                 ancien: a !== "?" && (anneeCourante - a) > SEUIL_30_ANS })));
+    const colParCle = new Map(colonnes.map(c => [c.cle, c]));
+    const gravite = { vert: 0, jaune: 1, orange: 2 }, couleurs = ["vert", "jaune", "orange"];
+    const noeuds = new Map();   // clé parcelle → {parcelle, colonne, couleur}
+    function poser(p, cle, couleur) {
       const k = cleRef(p);
-      const ms = parFille.get(k) || [];
-      if (vus.has(k) || !ms.length) return `<div class="noeud">${boite(p, racine ? "actuelle" : "")}</div>`;
-      vus.add(k);
-      let enfants = "";
-      for (const m of ms) {
-        for (const o of m.parcelles_origine) {
-          const cls = `branche ${m.couleur}${m.document.au_dela_30_ans ? " ancien" : ""}`;
-          const fils = m.terminus
-            ? `<div class="noeud">${boite(o, "terminus", `${m.document.nature_libelle} — origine de propriété`)}</div>`
-            : noeud(o);
-          enfants += `<div class="${cls}"><span class="num">${m.num}</span>${fils}</div>`;
-        }
-      }
-      return `<div class="noeud">${boite(p, racine ? "actuelle" : "")}<div class="enfants">${enfants}</div></div>`;
+      let n = noeuds.get(k);
+      if (!n) { n = { parcelle: p, cle, couleur: couleur || "vert" }; noeuds.set(k, n); colParCle.get(cle).noeuds.set(k, n); }
+      else if (couleur && gravite[couleur] > gravite[n.couleur]) n.couleur = couleur;
+      return n;
     }
-    html += `<div class="arbre">${noeud(res.reference, true)}</div>
-      <p class="legende-arbre">Branche : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 4px,#fff 4px 8px)"></i>au-delà de trente ans</p>`;
+    poser(res.reference, "auj", null);
+    const traits = [];
+    for (const m of res.maillons) {
+      const cleAn = String(m.document.annee ?? "?");
+      poser(m.parcelle, noeuds.has(cleRef(m.parcelle)) ? noeuds.get(cleRef(m.parcelle)).cle : cleAn, m.couleur); // la fille prend la couleur la plus grave
+      for (const o of m.parcelles_origine) {
+        poser(o, cleAn, null);
+        traits.push({ de: cleRef(m.parcelle), vers: cleRef(o), couleur: m.couleur, ancien: m.document.au_dela_30_ans, annee: m.document.annee, num: m.num });
+      }
+    }
+    function boite(n) {
+      const p = n.parcelle, actuelle = n.cle === "auj";
+      return `<div class="boite ${actuelle ? "actuelle" : n.couleur}" data-k="${cleRef(p)}"><span class="ref"><small>${p.prefixe}</small>${p.section} ${String(p.numero).replace(/^0+/, "")}</span>${p.contenance_m2 != null ? `<span class="surf">${Number(p.contenance_m2).toLocaleString("fr-FR")} m²</span>` : ""}</div>`;
+    }
+    const idFrise = `frise-${res.reference.dep}${res.reference.com}-${res.reference.section}${res.reference.numero}`.replace(/\W/g, "");
+    html += `<div class="frise" id="${idFrise}"><div class="colonnes">${colonnes.filter(c => c.noeuds.size).map((c, i) =>
+      `<div class="colonne p${i % 4}${c.ancien ? " ancien" : ""}"><div class="epoque">${c.titre}${c.ancien ? "<small>au-delà de trente ans</small>" : ""}</div>${[...c.noeuds.values()].map(boite).join("")}</div>`).join("")}</div><svg></svg></div>
+      <p class="legende-arbre">Trait : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:var(--orange)"></i>contradiction avec un acte <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 6px,#fff 6px 11px)"></i>au-delà de trente ans · l'année figure sur chaque trait</p>`;
+    friseATracer.push({ id: idFrise, traits });
 
     // ---- étage 2 : le tableau, une ligne par mouvement ----
-    html += `<table class="mvts"><thead><tr>
-      <th>N°</th><th>Parcelle</th><th>Opération</th><th>Année</th><th>Nature du document</th><th>Identifiant</th><th>Préfixe</th><th>Parcelles d'origine</th><th>Parcelles sœurs</th>
+    html += `<div class="tableau"><table class="mvts"><thead><tr>
+      <th>N°</th><th>Parcelle</th><th>Opération</th><th>Année</th><th>Nature du document</th><th>Identifiant</th><th>Lot</th><th>Préfixe</th><th>Parcelles d'origine</th><th>Parcelles sœurs</th>
     </tr></thead><tbody>`;
     let damierPose = false;
     for (const m of res.maillons) {
       if (!damierPose && m.document.au_dela_30_ans) {
-        html += `<tr class="damier"><td colspan="9"><span>au-delà de trente ans</span></td></tr>`; damierPose = true;
+        html += `<tr class="damier"><td colspan="10"><span>au-delà de trente ans</span></td></tr>`; damierPose = true;
       }
-      html += `<tr class="${m.couleur}${m.terminus ? " terminus" : ""}">
+      html += `<tr class="${m.couleur}">
         <td class="n">${m.num}</td>
-        <td>${m.parcelle.libelle}${surf(m.parcelle.contenance_m2)}</td>
-        <td>${m.terminus ? "remembrement — origine de propriété" : m.operation}</td>
+        <td class="parc">${m.parcelle.libelle}${surf(m.parcelle.contenance_m2)}</td>
+        <td>${m.operation}</td>
         <td>${m.document.annee ?? ""}</td>
         <td>${m.document.nature_libelle}${m.document.date_effet ? `<br><small>appliqué le ${new Date(m.document.date_effet).toLocaleDateString("fr-FR")}</small>` : ""}</td>
         <td>${m.document.id_dfi}</td>
+        <td>${m.document.lot ?? ""}</td>
         <td>${m.parcelle.prefixe}</td>
         <td class="origines">${m.parcelles_origine.map(o => `<div>${o.libelle}${surf(o.contenance_m2)}</div>`).join("")}</td>
         <td class="soeurs">${m.parcelles_soeurs.map(s => `${s.libelle}${surf(s.contenance_m2)}`).join("<br>")}</td>
       </tr>`;
       if (m.surfaces.signale) {
-        html += `<tr class="jaune"><td></td><td colspan="8"><div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div></td></tr>`;
+        html += `<tr class="jaune"><td></td><td colspan="9"><div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div></td></tr>`;
       }
     }
-    html += `</tbody></table></article>`;
+    html += `</tbody></table></div></article>`;
     return html;
   }).join("");
   document.getElementById("resultats").style.display = "block";
+  tracerFrises();
   document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+// Les traits de filiation : dessinés en SVG une fois les boîtes en place (et redessinés au redimensionnement)
+const friseATracer = [];
+function tracerFrises() {
+  for (const f of friseATracer) {
+    const frise = document.getElementById(f.id); if (!frise) continue;
+    const svg = frise.querySelector("svg"), cadre = frise.querySelector(".colonnes").getBoundingClientRect();
+    svg.setAttribute("width", cadre.width); svg.setAttribute("height", cadre.height);
+    const pos = k => { const b = frise.querySelector(`.boite[data-k="${k}"]`); if (!b) return null; const r = b.getBoundingClientRect();
+      return { g: r.left - cadre.left + frise.scrollLeft, d: r.right - cadre.left + frise.scrollLeft, y: r.top - cadre.top + r.height / 2 }; };
+    let d = "";
+    for (const t of f.traits) {
+      const a = pos(t.de), b = pos(t.vers); if (!a || !b) continue;
+      const x1 = a.d, y1 = a.y, x2 = b.g, y2 = b.y, cx = (x1 + x2) / 2;
+      d += `<path class="${t.couleur}${t.ancien ? " ancien" : ""}" d="M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}"/>`;
+      d += `<text x="${cx}" y="${(y1 + y2) / 2 - 6}" text-anchor="middle">${t.annee ?? "?"}</text>`;
+    }
+    svg.innerHTML = d;
+  }
+}
+window.addEventListener("resize", tracerFrises);
 
 /* ---------- sorties Word (branchées à l'étape suivante) ---------- */
 document.getElementById("btn-word-travail").addEventListener("click", () => genererWord("travail"));

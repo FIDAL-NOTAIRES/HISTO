@@ -1,0 +1,10 @@
+{
+  "name": "histo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HISTO — généalogie cadastrale sur les DFI (FIDAL Notaires)",
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4"
+  }
+}

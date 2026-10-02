@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>HISTO — historique cadastral</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+/* ---------- Charte FIDAL v2.2 ---------- */
+:root{
+  --nuit:#0F2238; --canard:#33838B; --orange:#FF982D; --carmin:#A01040;
+  --cyan:#6DD5DC; --jaune-forme:#FFE764; --jaune-texte:#FFC900;
+  --vert:#2E8B57; --papier:#FFFFFF; --gris:#F3F5F7; --trait:#D7DDE3; --texte:#1B2A3A;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:inherit;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:"Segoe UI",system-ui,sans-serif;color:var(--texte);background:var(--gris);line-height:1.5}
+h1,h2,h3{font-family:Georgia,"Times New Roman",serif;font-weight:normal;color:var(--nuit)}
+button{font:inherit;cursor:pointer}
+input,textarea{font:inherit}
+:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
+
+/* ---------- barre du haut ---------- */
+header{background:var(--nuit);color:#fff;padding:14px 22px;display:flex;align-items:baseline;gap:18px;flex-wrap:wrap}
+header h1{color:#fff;font-size:1.6rem;letter-spacing:.02em}
+header small{opacity:.75}
+#etatbase{margin-left:auto;font-size:.85rem;opacity:.85}
+
+main{max-width:980px;margin:0 auto;padding:24px 18px 60px}
+
+/* ---------- trois onglets ---------- */
+.onglets{display:flex;border-bottom:2px solid var(--trait);margin-bottom:18px}
+.onglets button{background:none;border:0;padding:12px 18px;font-size:1rem;color:var(--nuit);border-bottom:3px solid transparent;margin-bottom:-2px}
+.onglets button[aria-selected="true"]{border-bottom-color:var(--canard);font-weight:600}
+.panneau{display:none;background:var(--papier);border:1px solid var(--trait);border-radius:6px;padding:22px}
+.panneau.actif{display:block}
+label{display:block;font-size:.92rem;color:var(--nuit);margin-bottom:6px}
+input[type=text],textarea{width:100%;padding:10px 12px;border:1px solid var(--trait);border-radius:4px;background:#fff}
+textarea{min-height:80px;resize:vertical}
+.ligne{display:grid;gap:14px;margin-bottom:14px}
+@media(min-width:640px){.ligne.deux{grid-template-columns:1fr 1fr}}
+.suggest{position:relative}
+.suggest ul{position:absolute;left:0;right:0;top:100%;z-index:5;background:#fff;border:1px solid var(--trait);border-top:0;list-style:none;max-height:220px;overflow:auto;display:none}
+.suggest ul li{padding:8px 12px;cursor:pointer}
+.suggest ul li:hover,.suggest ul li[aria-selected="true"]{background:var(--gris)}
+.suggest ul li span{color:#5B6B7B;font-size:.85rem;margin-left:8px}
+.aide{font-size:.85rem;color:#5B6B7B;margin-top:6px}
+
+.depot{border:2px dashed var(--canard);border-radius:6px;padding:34px;text-align:center;color:var(--nuit);background:#F7FBFB}
+.depot.survol{background:#E7F5F6}
+.depot input{display:none}
+
+.bouton{background:var(--canard);color:#fff;border:0;border-radius:4px;padding:11px 20px;font-size:1rem}
+.bouton.secondaire{background:#fff;color:var(--nuit);border:1px solid var(--nuit)}
+.bouton[disabled]{opacity:.45;cursor:default}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;align-items:center}
+
+/* ---------- validation des références ---------- */
+#validation{display:none;margin-top:22px;background:var(--papier);border:1px solid var(--trait);border-radius:6px;padding:22px}
+#validation h2{font-size:1.25rem;margin-bottom:6px}
+table.refs{width:100%;border-collapse:collapse;margin-top:12px}
+table.refs th,table.refs td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--trait);font-size:.95rem}
+table.refs th{color:#5B6B7B;font-weight:600}
+table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
+.compteur{color:#5B6B7B;font-size:.9rem}
+
+/* ---------- résultats ---------- */
+#resultats{display:none;margin-top:28px}
+#resultats h2{font-size:1.35rem;margin-bottom:14px}
+.parcelle{background:var(--papier);border:1px solid var(--trait);border-radius:6px;padding:18px 20px;margin-bottom:18px}
+.parcelle .entete{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+.parcelle .entete h3{font-size:1.3rem}
+.parcelle .entete .commune{color:#5B6B7B}
+.pastille{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin-right:6px}
+.pastille.vert{background:var(--vert)}.pastille.jaune{background:var(--jaune-texte)}.pastille.orange{background:var(--orange)}
+.rien{padding:12px 14px;background:#FFF9E0;border-left:4px solid var(--jaune-texte);border-radius:3px}
+
+/* la filiation : du présent (haut) vers le passé (bas) */
+.filiation{position:relative;padding-left:26px}
+.filiation::before{content:"";position:absolute;left:8px;top:0;bottom:0;width:2px;background:var(--trait)}
+.maillon{position:relative;padding:12px 0 14px 14px}
+.maillon::before{content:"";position:absolute;left:-23px;top:20px;width:12px;height:12px;border-radius:50%;background:var(--canard);border:2px solid #fff}
+.maillon .operation{font-family:Georgia,serif;color:var(--nuit);font-size:1.05rem}
+.maillon .doc{font-size:.88rem;color:#5B6B7B;margin:2px 0 8px}
+.maillon .origines{display:flex;gap:0;flex-direction:column}   /* mères EN COLONNE */
+.maillon .origines div{padding:4px 10px;border-left:3px solid var(--nuit);margin:2px 0;background:var(--gris)}
+.maillon .soeurs{margin-top:8px;font-size:.9rem;color:#5B6B7B}
+.maillon .soeurs span{display:inline-block;background:var(--gris);padding:2px 8px;border-radius:3px;margin:2px 4px 2px 0}
+.surf{color:#5B6B7B;font-size:.9rem;margin-left:6px}
+.alerte-jaune{background:#FFF3C4;border-left:4px solid var(--jaune-texte);padding:8px 12px;border-radius:3px;margin-top:8px;font-size:.92rem}
+
+/* ligne d'arrivée des trente ans : damier, propre à l'écran */
+.damier{height:14px;margin:12px 0 12px -26px;position:relative;
+  background:repeating-conic-gradient(var(--nuit) 0 25%,#fff 0 50%) 0 0/14px 14px;border:1px solid var(--nuit)}
+.damier span{position:absolute;right:0;top:-22px;font-family:Georgia,serif;font-size:.85rem;color:var(--nuit);background:var(--papier);padding:0 6px}
+
+.boutons-sortie{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 8px}
+#attente{display:none;margin-top:22px;color:var(--nuit)}
+.erreur{background:#FBE9EE;border-left:4px solid var(--carmin);padding:10px 14px;border-radius:3px;margin-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>HISTO</h1>
+  <small>Historique cadastral d'une parcelle à partir de sa référence</small>
+  <span id="etatbase">Base : vérification…</span>
+</header>
+
+<main>
+  <!-- ======== Trois onglets ======== -->
+  <div class="onglets" role="tablist">
+    <button role="tab" aria-selected="true"  data-onglet="adresse">Adresse</button>
+    <button role="tab" aria-selected="false" data-onglet="reference">Référence cadastrale</button>
+    <button role="tab" aria-selected="false" data-onglet="depot">Dépôt d'un PDF ou d'un Excel</button>
+  </div>
+
+  <!-- Onglet 1 : adresse -->
+  <section class="panneau actif" id="panneau-adresse" role="tabpanel">
+    <div class="ligne">
+      <div class="suggest">
+        <label for="adresse">Adresse du bien</label>
+        <input type="text" id="adresse" placeholder="12 rue de la Gare, Croix" autocomplete="off">
+        <ul id="sugg-adresse" role="listbox"></ul>
+      </div>
+    </div>
+    <p class="aide">Les parcelles trouvées à cette adresse s'affichent d'abord ; vous choisissez celles à traiter.</p>
+    <div class="actions">
+      <button class="bouton" id="btn-adresse" disabled>Chercher les parcelles</button>
+    </div>
+  </section>
+
+  <!-- Onglet 2 : référence cadastrale -->
+  <section class="panneau" id="panneau-reference" role="tabpanel">
+    <div class="ligne deux">
+      <div class="suggest">
+        <label for="commune">Commune</label>
+        <input type="text" id="commune" placeholder="Croix" autocomplete="off">
+        <ul id="sugg-commune" role="listbox"></ul>
+        <p class="aide" id="commune-choisie"></p>
+      </div>
+      <div>
+        <label for="refs">Références</label>
+        <textarea id="refs" placeholder="AB 123, AB 124&#10;000 AC 45"></textarea>
+        <p class="aide">Section puis numéro, plusieurs références à la suite. Le préfixe (000, 001…) est facultatif.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="bouton" id="btn-reference" disabled>Vérifier les références</button>
+    </div>
+  </section>
+
+  <!-- Onglet 3 : dépôt -->
+  <section class="panneau" id="panneau-depot" role="tabpanel">
+    <label class="depot" id="zone-depot">
+      Glissez ici un PDF (titre, état hypothécaire, relevé de propriété…) ou un Excel,<br>ou cliquez pour choisir le fichier.
+      <input type="file" id="fichier" accept=".pdf,.xlsx,.xls,.csv">
+    </label>
+    <div class="ligne" style="margin-top:14px">
+      <div class="suggest">
+        <label for="commune-depot">Commune (si le document ne la précise pas)</label>
+        <input type="text" id="commune-depot" placeholder="Croix" autocomplete="off">
+        <ul id="sugg-commune-depot" role="listbox"></ul>
+        <p class="aide" id="commune-depot-choisie"></p>
+      </div>
+    </div>
+    <p class="aide" id="depot-etat"></p>
+  </section>
+
+  <!-- ======== Validation avant lancement (commune aux trois onglets) ======== -->
+  <section id="validation">
+    <h2>Références à traiter</h2>
+    <p class="compteur" id="val-compteur"></p>
+    <table class="refs">
+      <thead><tr><th></th><th>Commune</th><th>Préfixe</th><th>Section</th><th>Numéro</th><th>Origine</th></tr></thead>
+      <tbody id="val-corps"></tbody>
+    </table>
+    <div class="actions">
+      <button class="bouton" id="btn-lancer">Établir la filiation</button>
+      <button class="bouton secondaire" id="btn-annuler">Revenir</button>
+    </div>
+  </section>
+
+  <div id="attente">Interrogation de la base…</div>
+  <div id="erreur" class="erreur" style="display:none"></div>
+
+  <!-- ======== Résultats ======== -->
+  <section id="resultats">
+    <h2>Filiation</h2>
+    <div class="boutons-sortie">
+      <button class="bouton" id="btn-word-travail">Document de travail (Word)</button>
+      <button class="bouton secondaire" id="btn-word-client">Document client (Word)</button>
+    </div>
+    <div id="liste-resultats"></div>
+  </section>
+</main>
+
+<script>
+/* ============================================================
+   HISTO — écran d'entrée
+   Trois onglets, validation commune, puis appel /api/histo
+   ============================================================ */
+const API = "/api/histo";
+const GEO = "https://geo.api.gouv.fr/communes";              // fichier des communes (comme PAINT)
+const BAN = "https://api-adresse.data.gouv.fr/search/";       // adresses
+const CADASTRE_PT = "https://apicarto.ign.fr/api/cadastre/parcelle"; // parcelles à un point
+const SEUIL_30_ANS = 30;
+
+const etat = { refs: [], communeRef: null, communeDepot: null, resultats: null };
+
+/* ---------- onglets ---------- */
+document.querySelectorAll(".onglets [role=tab]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".onglets [role=tab]").forEach(x => x.setAttribute("aria-selected", x === b));
+  document.querySelectorAll(".panneau").forEach(p => p.classList.toggle("actif", p.id === "panneau-" + b.dataset.onglet));
+  cacherValidation();
+}));
+
+/* ---------- état de la base ---------- */
+fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "etat" }) })
+  .then(r => r.json())
+  .then(e => {
+    const d = e.dernier_chargement;
+    document.getElementById("etatbase").textContent = d
+      ? `Base : lot ${d.lot_source}, ${Number(e.mouvements_en_base).toLocaleString("fr-FR")} mouvements`
+      : "Base : aucun chargement";
+  })
+  .catch(() => { document.getElementById("etatbase").textContent = "Base : injoignable"; });
+
+/* ---------- suggestions de communes (fichier des communes) ---------- */
+function brancherCommune(inputId, listeId, aideId, cle) {
+  const input = document.getElementById(inputId), liste = document.getElementById(listeId), aide = document.getElementById(aideId);
+  let minuterie = null;
+  input.addEventListener("input", () => {
+    etat[cle] = null; aide.textContent = ""; majBoutons();
+    clearTimeout(minuterie);
+    const q = input.value.trim();
+    if (q.length < 2) { liste.style.display = "none"; return; }
+    minuterie = setTimeout(async () => {
+      const r = await fetch(`${GEO}?nom=${encodeURIComponent(q)}&fields=code,nom,codeDepartement,departement&boost=population&limit=8`);
+      const communes = await r.json();
+      liste.innerHTML = communes.map(c =>
+        `<li role="option" data-code="${c.code}" data-nom="${c.nom}" data-dep="${c.codeDepartement}">${c.nom}<span>${c.codeDepartement} — ${c.departement?.nom ?? ""}</span></li>`).join("");
+      liste.style.display = communes.length ? "block" : "none";
+    }, 220);
+  });
+  liste.addEventListener("click", ev => {
+    const li = ev.target.closest("li"); if (!li) return;
+    etat[cle] = { code: li.dataset.code, nom: li.dataset.nom, dep: li.dataset.dep };
+    input.value = li.dataset.nom; liste.style.display = "none";
+    aide.textContent = `${li.dataset.nom} (${li.dataset.dep}) — code ${li.dataset.code}`;
+    majBoutons();
+  });
+  document.addEventListener("click", ev => { if (!liste.contains(ev.target) && ev.target !== input) liste.style.display = "none"; });
+}
+brancherCommune("commune", "sugg-commune", "commune-choisie", "communeRef");
+brancherCommune("commune-depot", "sugg-commune-depot", "commune-depot-choisie", "communeDepot");
+
+function majBoutons() {
+  document.getElementById("btn-reference").disabled = !(etat.communeRef && document.getElementById("refs").value.trim());
+  document.getElementById("btn-adresse").disabled = !document.getElementById("adresse").value.trim();
+}
+document.getElementById("refs").addEventListener("input", majBoutons);
+document.getElementById("adresse").addEventListener("input", majBoutons);
+
+/* ---------- découpage d'une référence cadastrale ---------- */
+// Accepte « AB 123 », « AB123 », « 000 AB 123 », « AB 0123 », « 000AB0123 », « B 12 »
+const RE_REF = /(?:\b(\d{3})\s*)?\b([A-Z]{1,2})\s*0*(\d{1,4})\b/g;
+function extraireRefs(texte) {
+  const out = []; let m;
+  const t = texte.toUpperCase();
+  while ((m = RE_REF.exec(t)) !== null) {
+    out.push({ prefixe: (m[1] || "000"), section: m[2], numero: m[3].padStart(4, "0") });
+  }
+  return out;
+}
+function depuisCode(code) { // code INSEE → dep + com
+  return code.startsWith("97") ? { dep: code.slice(0, 3), com: code.slice(3) } : { dep: code.slice(0, 2), com: code.slice(2) };
+}
+
+/* ---------- onglet 2 : vérifier ---------- */
+document.getElementById("btn-reference").addEventListener("click", () => {
+  const refs = extraireRefs(document.getElementById("refs").value);
+  if (!refs.length) return montrerErreur("Aucune référence reconnue. Forme attendue : section puis numéro, ex. « AB 123 ».");
+  const c = etat.communeRef, dc = depuisCode(c.code);
+  montrerValidation(refs.map(r => ({ ...r, ...dc, communeNom: c.nom, origine: "saisie" })));
+});
+
+/* ---------- onglet 1 : adresse → parcelles ---------- */
+(() => {
+  const input = document.getElementById("adresse"), liste = document.getElementById("sugg-adresse");
+  let minuterie = null, choix = null;
+  input.addEventListener("input", () => {
+    choix = null; clearTimeout(minuterie);
+    const q = input.value.trim(); if (q.length < 4) { liste.style.display = "none"; return; }
+    minuterie = setTimeout(async () => {
+      const r = await fetch(`${BAN}?q=${encodeURIComponent(q)}&limit=6`);
+      const j = await r.json();
+      liste.innerHTML = (j.features || []).map((f, i) =>
+        `<li role="option" data-i="${i}">${f.properties.label}<span>${f.properties.context}</span></li>`).join("");
+      liste.style.display = j.features?.length ? "block" : "none";
+      liste.onclick = ev => {
+        const li = ev.target.closest("li"); if (!li) return;
+        choix = j.features[+li.dataset.i]; input.value = choix.properties.label; liste.style.display = "none";
+      };
+    }, 250);
+  });
+  document.getElementById("btn-adresse").addEventListener("click", async () => {
+    try {
+      let f = choix;
+      if (!f) { const r = await fetch(`${BAN}?q=${encodeURIComponent(input.value.trim())}&limit=1`); f = (await r.json()).features?.[0]; }
+      if (!f) return montrerErreur("Adresse introuvable.");
+      const [lon, lat] = f.geometry.coordinates;
+      const geom = encodeURIComponent(JSON.stringify({ type: "Point", coordinates: [lon, lat] }));
+      const r2 = await fetch(`${CADASTRE_PT}?geom=${geom}&_limit=20`);
+      const p = await r2.json();
+      const refs = (p.features || []).map(x => {
+        const pr = x.properties;
+        return { dep: pr.code_dep, com: pr.code_com, prefixe: pr.com_abs || "000", section: pr.section, numero: String(pr.numero).padStart(4, "0"),
+                 communeNom: pr.nom_com, origine: "adresse" };
+      });
+      if (!refs.length) return montrerErreur("Aucune parcelle trouvée à cette adresse. Essayez l'onglet Référence cadastrale.");
+      montrerValidation(refs);   // décision : on affiche d'abord, le collaborateur choisit
+    } catch (e) { montrerErreur("La recherche d'adresse a échoué : " + e.message); }
+  });
+})();
+
+/* ---------- onglet 3 : dépôt PDF / Excel ---------- */
+(() => {
+  const zone = document.getElementById("zone-depot"), fichier = document.getElementById("fichier"), info = document.getElementById("depot-etat");
+  ["dragenter", "dragover"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add("survol"); }));
+  ["dragleave", "drop"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove("survol"); }));
+  zone.addEventListener("drop", e => { if (e.dataTransfer.files[0]) traiter(e.dataTransfer.files[0]); });
+  fichier.addEventListener("change", () => { if (fichier.files[0]) traiter(fichier.files[0]); });
+
+  async function traiter(f) {
+    info.textContent = `Lecture de ${f.name}…`;
+    try {
+      const nom = f.name.toLowerCase();
+      let texte = "";
+      if (nom.endsWith(".pdf")) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        const pdf = await pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const c = await page.getTextContent();
+          texte += c.items.map(it => it.str).join(" ") + "\n";
+        }
+      } else {
+        const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+        for (const n of wb.SheetNames) {
+          const lignes = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false });
+          // on retrouve les références où qu'elles soient : on concatène chaque ligne
+          texte += lignes.map(l => (l || []).join(" ")).join("\n") + "\n";
+        }
+      }
+      // Référence précédée d'une commune ? On tente « Commune de X » / « commune : X »
+      const mCommune = /commune\s*(?:de|:)\s*([A-ZÀ-Ü][A-Za-zÀ-ÿ'\- ]{2,40})/i.exec(texte);
+      let commune = etat.communeDepot;
+      if (!commune && mCommune) {
+        const r = await fetch(`${GEO}?nom=${encodeURIComponent(mCommune[1].trim())}&fields=code,nom,codeDepartement&boost=population&limit=1`);
+        const c = (await r.json())[0];
+        if (c) commune = { code: c.code, nom: c.nom, dep: c.codeDepartement };
+      }
+      if (!commune) { info.textContent = "Commune non détectée dans le document : choisissez-la ci-dessus puis redéposez le fichier."; return; }
+      // dédoublonnage des références trouvées
+      const vues = new Set();
+      const refs = extraireRefs(texte).filter(r => { const k = r.prefixe + r.section + r.numero; if (vues.has(k)) return false; vues.add(k); return true; });
+      if (!refs.length) { info.textContent = "Aucune référence cadastrale reconnue dans ce document."; return; }
+      const dc = depuisCode(commune.code);
+      info.textContent = `${refs.length} référence(s) trouvée(s) dans ${f.name}.`;
+      montrerValidation(refs.map(r => ({ ...r, ...dc, communeNom: commune.nom, origine: nom.endsWith(".pdf") ? "PDF" : "Excel" })));
+    } catch (e) { info.textContent = ""; montrerErreur("Lecture du fichier impossible : " + e.message); }
+  }
+})();
+
+/* ---------- validation commune aux trois onglets ---------- */
+function montrerValidation(refs) {
+  cacherErreur();
+  etat.refs = refs.map(r => ({ ...r, retenue: true }));
+  const corps = document.getElementById("val-corps");
+  corps.innerHTML = etat.refs.map((r, i) => `
+    <tr data-i="${i}">
+      <td><input type="checkbox" checked aria-label="retenir"></td>
+      <td>${r.communeNom} (${r.dep})</td><td>${r.prefixe}</td><td>${r.section}</td>
+      <td>${String(r.numero).replace(/^0+/, "")}</td><td>${r.origine}</td>
+    </tr>`).join("");
+  corps.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
+    const tr = cb.closest("tr"); etat.refs[+tr.dataset.i].retenue = cb.checked; tr.classList.toggle("ecartee", !cb.checked); majCompteur();
+  }));
+  majCompteur();
+  document.getElementById("validation").style.display = "block";
+  document.getElementById("resultats").style.display = "none";
+  document.getElementById("validation").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function majCompteur() {
+  const n = etat.refs.filter(r => r.retenue).length;
+  document.getElementById("val-compteur").textContent = `${n} référence(s) retenue(s) sur ${etat.refs.length}. Décochez celles à écarter.`;
+  document.getElementById("btn-lancer").disabled = n === 0;
+}
+function cacherValidation() { document.getElementById("validation").style.display = "none"; }
+document.getElementById("btn-annuler").addEventListener("click", cacherValidation);
+
+/* ---------- lancement ---------- */
+document.getElementById("btn-lancer").addEventListener("click", async () => {
+  const refs = etat.refs.filter(r => r.retenue).map(({ dep, com, prefixe, section, numero }) => ({ dep, com, prefixe, section, numero }));
+  const attente = document.getElementById("attente");
+  attente.style.display = "block"; cacherErreur();
+  try {
+    const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "filiation", references: refs }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erreur || r.statusText);
+    etat.resultats = j;
+    afficherResultats(j);
+  } catch (e) { montrerErreur("Impossible d'établir la filiation : " + e.message); }
+  finally { attente.style.display = "none"; }
+});
+
+/* ---------- affichage des résultats : du présent vers le passé ---------- */
+function surf(m2) { return m2 == null ? "" : `<span class="surf">${Number(m2).toLocaleString("fr-FR")} m²</span>`; }
+function nomCommune(ref) { const r = etat.refs.find(x => x.dep === ref.dep && x.com === ref.com); return r ? r.communeNom : `${ref.dep} ${ref.com}`; }
+
+function afficherResultats(j) {
+  const zone = document.getElementById("liste-resultats");
+  const anneeCourante = new Date().getFullYear();
+  zone.innerHTML = j.resultats.map(res => {
+    const ref = res.reference;
+    let html = `<article class="parcelle">
+      <div class="entete">
+        <span class="pastille ${res.alerte}"></span>
+        <h3>${ref.libelle}</h3>
+        <span class="commune">${nomCommune(ref)}</span>
+        ${res.plus_ancien_mouvement ? `<span class="compteur">plus ancien mouvement connu : ${res.plus_ancien_mouvement}</span>` : ""}
+      </div>`;
+    if (!res.trouve) {
+      html += `<p class="rien">${res.message}</p></article>`;
+      return html;
+    }
+    html += `<div class="filiation">`;
+    let damierPose = false;
+    for (const m of res.maillons) {
+      if (!damierPose && m.document.au_dela_30_ans) {
+        html += `<div class="damier"><span>au-delà de trente ans</span></div>`; damierPose = true;
+      }
+      html += `<div class="maillon">
+        <div class="operation">${m.parcelle.libelle}${surf(m.parcelle.contenance_m2)} — ${m.operation}${m.document.annee ? ` en ${m.document.annee}` : ""}</div>
+        <div class="doc">${m.document.nature_libelle}, document n° ${m.document.id_dfi}${m.document.date_effet ? `, appliqué le ${new Date(m.document.date_effet).toLocaleDateString("fr-FR")}` : ""}</div>
+        <div class="origines">${m.parcelles_origine.map(o => `<div>issue de ${o.libelle}${surf(o.contenance_m2)}</div>`).join("")}</div>
+        ${m.parcelles_soeurs.length ? `<div class="soeurs">parcelles sœurs : ${m.parcelles_soeurs.map(s => `<span>${s.libelle}${surf(s.contenance_m2)}</span>`).join("")}</div>` : ""}
+        ${m.surfaces.signale ? `<div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div>` : ""}
+      </div>`;
+    }
+    html += `</div></article>`;
+    return html;
+  }).join("");
+  document.getElementById("resultats").style.display = "block";
+  document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ---------- sorties Word (branchées à l'étape suivante) ---------- */
+document.getElementById("btn-word-travail").addEventListener("click", () => genererWord("travail"));
+document.getElementById("btn-word-client").addEventListener("click", () => genererWord("client"));
+function genererWord(version) {
+  montrerErreur(`La génération du document ${version} sera disponible à la prochaine livraison.`);
+}
+
+/* ---------- erreurs ---------- */
+function montrerErreur(msg) { const e = document.getElementById("erreur"); e.textContent = msg; e.style.display = "block"; }
+function cacherErreur() { document.getElementById("erreur").style.display = "none"; }
+</script>
+</body>
+</html>

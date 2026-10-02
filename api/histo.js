@@ -14,8 +14,8 @@ const sql = neon(process.env.DATABASE_URL);
 
 // ---------- paramètres métier (décisions des 01/10/2026) ----------
 const SEUIL_30_ANS = 30;              // repère visuel, pas une coupure
-const TOLERANCE_SURFACE_PCT = 2;      // écart signalé au-delà de 2 %
-const PLANCHER_SURFACE_M2 = 4;        // … et au-delà de 4 m² d'écart
+const TOLERANCE_SURFACE_PCT = 4;      // écart signalé au-delà de 4 % (tranché le 02/10/2026)
+const PLANCHER_SURFACE_M2 = 5;        // … et au-delà de 5 m² d'écart (tranché le 02/10/2026)
 const PROFONDEUR_MAX = 60;            // garde-fou contre les boucles
 
 const LIBELLES_NATURE = {

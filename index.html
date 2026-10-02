@@ -79,24 +79,44 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 .pastille.vert{background:var(--vert)}.pastille.jaune{background:var(--jaune-texte)}.pastille.orange{background:var(--orange)}
 .rien{padding:12px 14px;background:#FFF9E0;border-left:4px solid var(--jaune-texte);border-radius:3px}
 
-/* la filiation : du présent (haut) vers le passé (bas) */
-.filiation{position:relative;padding-left:26px}
-.filiation::before{content:"";position:absolute;left:8px;top:0;bottom:0;width:2px;background:var(--trait)}
-.maillon{position:relative;padding:12px 0 14px 14px}
-.maillon::before{content:"";position:absolute;left:-23px;top:20px;width:12px;height:12px;border-radius:50%;background:var(--canard);border:2px solid #fff}
-.maillon .operation{font-family:Georgia,serif;color:var(--nuit);font-size:1.05rem}
-.maillon .doc{font-size:.88rem;color:#5B6B7B;margin:2px 0 8px}
-.maillon .origines{display:flex;gap:0;flex-direction:column}   /* mères EN COLONNE */
-.maillon .origines div{padding:4px 10px;border-left:3px solid var(--nuit);margin:2px 0;background:var(--gris)}
-.maillon .soeurs{margin-top:8px;font-size:.9rem;color:#5B6B7B}
-.maillon .soeurs span{display:inline-block;background:var(--gris);padding:2px 8px;border-radius:3px;margin:2px 4px 2px 0}
+/* ===== ÉTAGE 1 : l'arbre, de GAUCHE (parcelle actuelle) à DROITE (passé) ===== */
+.arbre{overflow-x:auto;padding:6px 0 10px}
+.noeud{display:flex;align-items:center}
+.boite{flex:none;background:#fff;border:1px solid var(--trait);border-radius:4px;padding:6px 12px;min-width:120px}
+.boite .ref{font-family:Georgia,serif;color:var(--nuit);font-size:1.05rem;white-space:nowrap}
+.boite .surf{display:block;margin:0;font-size:.82rem;color:#5B6B7B}
+.boite.actuelle{border-color:var(--nuit);border-width:2px}
+.boite.terminus{background:var(--gris);border-style:dashed}
+.boite .terme{display:block;font-size:.78rem;color:var(--nuit);margin-top:2px}
+.enfants{display:flex;flex-direction:column;gap:8px;padding-left:28px;position:relative}
+/* la BRANCHE porte la couleur de fiabilité : vert / jaune / orange */
+.branche{position:relative;display:flex;align-items:center}
+.branche::before{content:"";position:absolute;left:-28px;width:28px;height:4px;top:calc(50% - 2px);background:var(--vert)}
+.branche.jaune::before{background:var(--jaune-texte)}
+.branche.orange::before{background:var(--orange)}
+.branche.ancien::before{background:repeating-linear-gradient(90deg,var(--nuit) 0 4px,#fff 4px 8px)} /* traverse les 30 ans : damier */
+.branche .num{position:absolute;left:-26px;top:calc(50% - 20px);font-size:.75rem;color:#5B6B7B;background:var(--papier);padding:0 3px}
+.legende-arbre{font-size:.82rem;color:#5B6B7B;margin:4px 0 14px}
+.legende-arbre i{display:inline-block;width:22px;height:4px;vertical-align:middle;margin:0 6px 0 10px}
+
+/* ===== ÉTAGE 2 : le tableau, une ligne par mouvement, numérotation incrémentale ===== */
+table.mvts{width:100%;border-collapse:collapse;font-size:.9rem}
+table.mvts th,table.mvts td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--trait);vertical-align:top}
+table.mvts th{color:#5B6B7B;font-weight:600;white-space:nowrap}
+table.mvts td.n{color:#5B6B7B;width:2.2em}
+table.mvts tr.jaune td:first-child{box-shadow:inset 4px 0 0 var(--jaune-texte)}
+table.mvts tr.vert td:first-child{box-shadow:inset 4px 0 0 var(--vert)}
+table.mvts tr.orange td:first-child{box-shadow:inset 4px 0 0 var(--orange)}
+table.mvts tr.terminus td{background:var(--gris)}
+table.mvts .origines div{white-space:nowrap}          /* mères EN COLONNE */
+table.mvts .soeurs{color:#5B6B7B}
 .surf{color:#5B6B7B;font-size:.9rem;margin-left:6px}
 .alerte-jaune{background:#FFF3C4;border-left:4px solid var(--jaune-texte);padding:8px 12px;border-radius:3px;margin-top:8px;font-size:.92rem}
 
-/* ligne d'arrivée des trente ans : damier, propre à l'écran */
-.damier{height:14px;margin:12px 0 12px -26px;position:relative;
-  background:repeating-conic-gradient(var(--nuit) 0 25%,#fff 0 50%) 0 0/14px 14px;border:1px solid var(--nuit)}
-.damier span{position:absolute;right:0;top:-22px;font-family:Georgia,serif;font-size:.85rem;color:var(--nuit);background:var(--papier);padding:0 6px}
+/* ligne d'arrivée des trente ans dans le tableau : damier, propre à l'écran */
+tr.damier td{padding:0;height:12px;border:0;
+  background:repeating-conic-gradient(var(--nuit) 0 25%,#fff 0 50%) 0 0/12px 12px}
+tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:var(--nuit);background:var(--papier);padding:2px 8px;width:max-content}
 
 .boutons-sortie{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 8px}
 #attente{display:none;margin-top:22px;color:var(--nuit)}
@@ -420,6 +440,7 @@ document.getElementById("btn-lancer").addEventListener("click", async () => {
 
 /* ---------- affichage des résultats : du présent vers le passé ---------- */
 function surf(m2) { return m2 == null ? "" : `<span class="surf">${Number(m2).toLocaleString("fr-FR")} m²</span>`; }
+function cleRef(p) { return `${p.dep}-${p.com}-${p.prefixe}-${p.section}-${String(p.numero).padStart(4, "0")}`; }
 function nomCommune(ref) { const r = etat.refs.find(x => x.dep === ref.dep && x.com === ref.com); return r ? r.communeNom : `${ref.dep} ${ref.com}`; }
 
 function afficherResultats(j) {
@@ -438,21 +459,63 @@ function afficherResultats(j) {
       html += `<p class="rien">${res.message}</p></article>`;
       return html;
     }
-    html += `<div class="filiation">`;
+    // numérotation incrémentale des mouvements, partagée par l'arbre et le tableau
+    res.maillons.forEach((m, i) => { m.num = i + 1; m.couleur = m.terminus ? "vert" : (m.surfaces.signale ? "jaune" : "vert"); });
+
+    // ---- étage 1 : l'arbre, parcelle actuelle à gauche, passé vers la droite ----
+    const parFille = new Map();   // clé parcelle fille → maillons où elle naît
+    for (const m of res.maillons) {
+      const k = cleRef(m.parcelle); if (!parFille.has(k)) parFille.set(k, []); parFille.get(k).push(m);
+    }
+    const vus = new Set();
+    function boite(p, classes = "", terme = "") {
+      return `<div class="boite ${classes}"><span class="ref">${p.libelle}</span>${p.contenance_m2 != null ? `<span class="surf">${Number(p.contenance_m2).toLocaleString("fr-FR")} m²</span>` : ""}${terme ? `<span class="terme">${terme}</span>` : ""}</div>`;
+    }
+    function noeud(p, racine = false) {
+      const k = cleRef(p);
+      const ms = parFille.get(k) || [];
+      if (vus.has(k) || !ms.length) return `<div class="noeud">${boite(p, racine ? "actuelle" : "")}</div>`;
+      vus.add(k);
+      let enfants = "";
+      for (const m of ms) {
+        for (const o of m.parcelles_origine) {
+          const cls = `branche ${m.couleur}${m.document.au_dela_30_ans ? " ancien" : ""}`;
+          const fils = m.terminus
+            ? `<div class="noeud">${boite(o, "terminus", `${m.document.nature_libelle} — origine de propriété`)}</div>`
+            : noeud(o);
+          enfants += `<div class="${cls}"><span class="num">${m.num}</span>${fils}</div>`;
+        }
+      }
+      return `<div class="noeud">${boite(p, racine ? "actuelle" : "")}<div class="enfants">${enfants}</div></div>`;
+    }
+    html += `<div class="arbre">${noeud(res.reference, true)}</div>
+      <p class="legende-arbre">Branche : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 4px,#fff 4px 8px)"></i>au-delà de trente ans</p>`;
+
+    // ---- étage 2 : le tableau, une ligne par mouvement ----
+    html += `<table class="mvts"><thead><tr>
+      <th>N°</th><th>Parcelle</th><th>Opération</th><th>Année</th><th>Nature du document</th><th>Identifiant</th><th>Préfixe</th><th>Parcelles d'origine</th><th>Parcelles sœurs</th>
+    </tr></thead><tbody>`;
     let damierPose = false;
     for (const m of res.maillons) {
       if (!damierPose && m.document.au_dela_30_ans) {
-        html += `<div class="damier"><span>au-delà de trente ans</span></div>`; damierPose = true;
+        html += `<tr class="damier"><td colspan="9"><span>au-delà de trente ans</span></td></tr>`; damierPose = true;
       }
-      html += `<div class="maillon">
-        <div class="operation">${m.parcelle.libelle}${surf(m.parcelle.contenance_m2)} — ${m.operation}${m.document.annee ? ` en ${m.document.annee}` : ""}</div>
-        <div class="doc">${m.document.nature_libelle}, document n° ${m.document.id_dfi}${m.document.date_effet ? `, appliqué le ${new Date(m.document.date_effet).toLocaleDateString("fr-FR")}` : ""}</div>
-        <div class="origines">${m.parcelles_origine.map(o => `<div>issue de ${o.libelle}${surf(o.contenance_m2)}</div>`).join("")}</div>
-        ${m.parcelles_soeurs.length ? `<div class="soeurs">parcelles sœurs : ${m.parcelles_soeurs.map(s => `<span>${s.libelle}${surf(s.contenance_m2)}</span>`).join("")}</div>` : ""}
-        ${m.surfaces.signale ? `<div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div>` : ""}
-      </div>`;
+      html += `<tr class="${m.couleur}${m.terminus ? " terminus" : ""}">
+        <td class="n">${m.num}</td>
+        <td>${m.parcelle.libelle}${surf(m.parcelle.contenance_m2)}</td>
+        <td>${m.terminus ? "remembrement — origine de propriété" : m.operation}</td>
+        <td>${m.document.annee ?? ""}</td>
+        <td>${m.document.nature_libelle}${m.document.date_effet ? `<br><small>appliqué le ${new Date(m.document.date_effet).toLocaleDateString("fr-FR")}</small>` : ""}</td>
+        <td>${m.document.id_dfi}</td>
+        <td>${m.parcelle.prefixe}</td>
+        <td class="origines">${m.parcelles_origine.map(o => `<div>${o.libelle}${surf(o.contenance_m2)}</div>`).join("")}</td>
+        <td class="soeurs">${m.parcelles_soeurs.map(s => `${s.libelle}${surf(s.contenance_m2)}`).join("<br>")}</td>
+      </tr>`;
+      if (m.surfaces.signale) {
+        html += `<tr class="jaune"><td></td><td colspan="8"><div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div></td></tr>`;
+      }
     }
-    html += `</div></article>`;
+    html += `</tbody></table></article>`;
     return html;
   }).join("");
   document.getElementById("resultats").style.display = "block";

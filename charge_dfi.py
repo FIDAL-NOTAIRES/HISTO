@@ -1,227 +1,192 @@
 # -*- coding: utf-8 -*-
 """
-HISTO — Chargement initial des DFI (DGFiP) dans Neon.
-À lancer sur le poste de travail, pas sur Vercel (volume France entière).
+HISTO — Découpage des DFI (DGFiP, source officielle data.gouv.fr) en UN FICHIER PAR COMMUNE,
+à écrire dans le dossier « HISTO » du Google Drive du cabinet (dossier synchronisé sur le poste).
 
-Usage :   python charge_dfi.py  <fichier_csv_ou_csv.gz>  <identifiant_du_lot>
-Exemple : python charge_dfi.py dfi_national.csv.gz 2026-T3
+Format source (descriptifs DGFiP 2023 et janvier 2025) : fichiers .txt, séparateur « ; », champs fixes :
+  dep(3) ; com(3) ; prefixe(3) ; id_dfi(7) ; nature(1) ; date AAAAMMJJ(8) ; géomètre(30) ;
+  [numéro du géomètre(5) — depuis janvier 2025] ; lot(5) ; type(1 = mères, 2 = filles) ;
+  puis jusqu'à 175 cellules de 6 caractères : section(2) + numéro de plan(4), ex. AC0026.
+Chaque situation trimestrielle = DEUX archives ZIP (coupure variable entre les deux).
+Le script reconnaît la disposition LIGNE PAR LIGNE (lot à 5 chiffres suivi du type 1/2).
 
-La chaîne de connexion Neon est demandée au clavier (saisie masquée),
-ou lue dans la variable d'environnement HISTO_DATABASE_URL si elle existe.
+Usage :   python charge_dfi.py  <situation>  <dossier_de_sortie>  <zip_ou_txt_1>  [<zip_ou_txt_2> ...]  [--dep=59,62]
+Exemple : python charge_dfi.py 2026-07 "G:\\Mon Drive\\HISTO" "archive1.zip" "archive2.zip"
 
-Prérequis (une seule fois) :  pip install "psycopg[binary]"
+Sortie : <dossier>/<dep>/HISTO_<dep><com>.json  (ex. HISTO/59/HISTO_59350.json)
+         <dossier>/HISTO_situation.json          (situation, date, compteurs)
+Les fichiers d'une commune sont RÉÉCRITS à chaque passage (mise à jour trimestrielle = relancer).
 """
 
-import csv
-import gzip
 import io
 import os
 import sys
-import getpass
-from datetime import datetime
-
-import psycopg
-
-# ------------------------------------------------------------------
-# TABLE DE CORRESPONDANCE DES COLONNES — À AJUSTER AU VU DU FICHIER
-# Clé = nom logique utilisé par le script ; valeur = nom de colonne
-# dans l'agrégation nationale data.gouv.fr. On vérifie une fois,
-# on corrige ici, et rien d'autre ne bouge.
-# ------------------------------------------------------------------
-COLONNES = {
-    "dep":          "code_departement",
-    "com":          "code_commune",
-    "id_dfi":       "identifiant_dfi",
-    "nature":       "nature_document",
-    "date_effet":   "date_application",     # formats acceptés : AAAA-MM-JJ, JJ/MM/AAAA, AAAAMMJJ
-    "type":         "type_parcelle",        # 1 = mère, 2 = fille
-    "prefixe":      "prefixe_section",
-    "section":      "section",
-    "numero":       "numero_plan",
-    "contenance":   "contenance",           # optionnelle : mettre None si absente
-}
-
-SEPARATEUR = ";"
-ENCODAGE = "utf-8"          # passer à "latin-1" si le fichier le demande
-TAILLE_LOT = 50_000         # lignes par envoi COPY
+import json
+import zipfile
+from datetime import datetime, date
 
 # ------------------------------------------------------------------
-
-
-def connexion():
-    url = os.environ.get("HISTO_DATABASE_URL")
-    if not url:
-        url = getpass.getpass("Chaîne de connexion Neon (saisie masquée) : ").strip()
-    return psycopg.connect(url, autocommit=False)
-
-
-def ouvrir(chemin):
-    if chemin.lower().endswith(".gz"):
-        return io.TextIOWrapper(gzip.open(chemin, "rb"), encoding=ENCODAGE, newline="")
-    return open(chemin, "r", encoding=ENCODAGE, newline="")
+COL_DEP, COL_COM, COL_PREFIXE, COL_ID, COL_NATURE, COL_DATE, COL_GEOMETRE = range(7)
+ENCODAGE = "latin-1"          # fichiers DGFiP ; passer à "utf-8" si besoin
+PREFIXE_FICHIER = "HISTO_"    # nom des fichiers de communes : HISTO_<dep><com>.json
+# ------------------------------------------------------------------
 
 
 def norm_dep(v):
+    """DGFiP code sur 3 caractères (023, 2A0, 971) → code INSEE (23, 2A, 971)."""
     v = (v or "").strip().upper()
-    return v.zfill(2) if v.isdigit() and len(v) < 2 else v
-
-
-def norm_com(v):
-    return (v or "").strip().zfill(3)
-
-
-def norm_prefixe(v):
-    v = (v or "").strip()
-    return v.zfill(3) if v else "000"
-
-
-def norm_section(v):
-    return (v or "").strip().upper().lstrip("0") or "0"
-
-
-def norm_numero(v):
-    return (v or "").strip().zfill(4)
+    if len(v) == 3 and v[0] == "0":
+        return v[1:]
+    if len(v) == 3 and v[:2] in ("2A", "2B"):
+        return v[:2]
+    return v
 
 
 def norm_date(v):
     v = (v or "").strip()
-    if not v:
+    try:
+        return datetime.strptime(v, "%Y%m%d").date().isoformat()
+    except ValueError:
         return None
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y%m%d"):
-        try:
-            return datetime.strptime(v, fmt).date().isoformat()
-        except ValueError:
-            continue
+
+
+def position_lot(champs):
+    """Repère la colonne du lot d'analyse (5 chiffres) immédiatement suivie du type (1 ou 2)."""
+    for i in (7, 8):
+        if len(champs) > i + 1 and champs[i].strip().isdigit() and len(champs[i].strip()) == 5 \
+           and champs[i + 1].strip() in ("1", "2"):
+            return i
     return None
 
 
-def norm_int(v):
-    v = (v or "").strip()
-    return int(v) if v.isdigit() else None
+def cellules(champs, premiere):
+    """Identifiants de parcelles (6 caractères : section sur 2, numéro sur 4), tels quels."""
+    out = []
+    for c in champs[premiere:]:
+        c = c.rstrip()                      # on garde l'espace de tête d'une section à une lettre (« A0007 »)
+        if len(c) >= 6:
+            out.append(c[:6])
+    return out
+
+
+def fichiers_texte(chemins):
+    for chemin in chemins:
+        if chemin.lower().endswith(".zip"):
+            with zipfile.ZipFile(chemin) as z:
+                for nom in z.namelist():
+                    if nom.lower().endswith(".txt"):
+                        with z.open(nom) as f:
+                            yield nom, io.TextIOWrapper(f, encoding=ENCODAGE, newline="")
+        else:
+            with open(chemin, "r", encoding=ENCODAGE, newline="") as f:
+                yield os.path.basename(chemin), f
+
+
+class Ecrivain:
+    """Accumule une commune à la fois (les fichiers DGFiP sont triés), écrit à chaque changement."""
+
+    def __init__(self, dossier, situation):
+        self.dossier, self.situation = dossier, situation
+        self.cle = None            # (dep, com) en cours
+        self.docs = {}             # id_dfi → document
+        self.nb_communes = self.nb_docs = self.nb_parcelles = 0
+
+    def ajouter(self, dep, com, prefixe, id_dfi, nature, date_effet, lot, type_p, parcelles):
+        if (dep, com) != self.cle:
+            self.vider()
+            self.cle = (dep, com)
+        d = self.docs.get(id_dfi)
+        if d is None:
+            d = self.docs[id_dfi] = {"id": id_dfi, "nat": nature, "date": date_effet, "lots": {}}
+            self.nb_docs += 1
+        if nature is not None and d["nat"] is None:
+            d["nat"] = nature
+        if date_effet and (d["date"] is None or date_effet > d["date"]):
+            d["date"] = date_effet
+        l = d["lots"].get(lot)
+        if l is None:
+            l = d["lots"][lot] = {"lot": lot, "pre": prefixe, "m": [], "f": []}
+        l["m" if type_p == 1 else "f"].extend(parcelles)
+        self.nb_parcelles += len(parcelles)
+
+    def vider(self):
+        if self.cle is None or not self.docs:
+            self.docs = {}
+            return
+        dep, com = self.cle
+        sous = os.path.join(self.dossier, dep)
+        os.makedirs(sous, exist_ok=True)
+        contenu = {
+            "dep": dep, "com": com, "situation": self.situation,
+            "docs": [{**d, "lots": list(d["lots"].values())} for d in self.docs.values()],
+        }
+        with open(os.path.join(sous, f"{PREFIXE_FICHIER}{dep}{com}.json"), "w", encoding="utf-8") as f:
+            json.dump(contenu, f, ensure_ascii=False, separators=(",", ":"))
+        self.nb_communes += 1
+        self.docs = {}
 
 
 def main():
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    deps_voulus = None
+    for a in list(args):
+        if a.startswith("--dep="):
+            deps_voulus = {norm_dep(x.strip().zfill(3) if x.strip().isdigit() and len(x.strip()) <= 2 else x.strip())
+                           for x in a[6:].split(",") if x.strip()}
+            args.remove(a)
+    if len(args) < 3:
         print(__doc__)
         sys.exit(1)
 
-    chemin, lot = sys.argv[1], sys.argv[2]
-    if not os.path.exists(chemin):
-        print(f"Fichier introuvable : {chemin}")
-        sys.exit(1)
+    situation, dossier, chemins = args[0], args[1], args[2:]
+    for c in chemins:
+        if not os.path.exists(c):
+            print(f"Fichier introuvable : {c}")
+            sys.exit(1)
+    os.makedirs(dossier, exist_ok=True)
+    if deps_voulus:
+        print("Départements retenus :", ", ".join(sorted(deps_voulus)))
 
-    cx = connexion()
-    cur = cx.cursor()
-
-    # Journal : ouverture du chargement
-    cur.execute(
-        "INSERT INTO histo_chargement (lot_source) VALUES (%s) RETURNING id",
-        (lot,),
-    )
-    chargement_id = cur.fetchone()[0]
-    cx.commit()
-
-    # Tables de travail (vidées à chaque passage, remplies par COPY)
-    cur.execute("DROP TABLE IF EXISTS tmp_dfi_brut")
-    cur.execute("""
-        CREATE TEMP TABLE tmp_dfi_brut (
-            dep TEXT, com TEXT, id_dfi TEXT, nature SMALLINT, date_effet DATE,
-            type_parcelle SMALLINT, prefixe TEXT, section TEXT, numero TEXT,
-            contenance INTEGER
-        )
-    """)
-
-    print(f"Lecture de {chemin} …")
-    nb = 0
-    with ouvrir(chemin) as f:
-        lecteur = csv.DictReader(f, delimiter=SEPARATEUR)
-        manquantes = [c for c in COLONNES.values() if c and c not in lecteur.fieldnames]
-        if manquantes:
-            print("Colonnes absentes du fichier :", ", ".join(manquantes))
-            print("Colonnes trouvées :", ", ".join(lecteur.fieldnames))
-            print("→ Corriger la table COLONNES en tête de script.")
-            cur.execute(
-                "UPDATE histo_chargement SET statut='echec', fin=now(), message=%s WHERE id=%s",
-                ("colonnes absentes : " + ", ".join(manquantes), chargement_id),
+    ecrivain = Ecrivain(dossier, situation)
+    nb_lignes = 0
+    for nom, flux in fichiers_texte(chemins):
+        print(f"Lecture de {nom} …")
+        for brute in flux:
+            champs = brute.rstrip("\r\n").split(";")
+            pos = position_lot(champs)
+            if pos is None:
+                continue
+            dep = norm_dep(champs[COL_DEP])
+            if deps_voulus and dep not in deps_voulus:
+                continue
+            ecrivain.ajouter(
+                dep,
+                champs[COL_COM].strip().zfill(3),
+                champs[COL_PREFIXE].strip().zfill(3) or "000",
+                champs[COL_ID].strip(),
+                int(champs[COL_NATURE]) if champs[COL_NATURE].strip().isdigit() else None,
+                norm_date(champs[COL_DATE]),
+                champs[pos].strip().zfill(5),
+                int(champs[pos + 1]),
+                cellules(champs, pos + 2),
             )
-            cx.commit()
-            sys.exit(2)
+            nb_lignes += 1
+            if nb_lignes % 200_000 == 0:
+                print(f"  {nb_lignes:,} lignes, {ecrivain.nb_communes:,} communes écrites".replace(",", " ").replace("lignes ", "lignes, "), end="\r")
+        ecrivain.vider()
+        ecrivain.cle = None
+        print()
 
-        tampon = []
+    with open(os.path.join(dossier, f"{PREFIXE_FICHIER}situation.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "situation": situation, "genere_le": date.today().isoformat(),
+            "communes": ecrivain.nb_communes, "documents": ecrivain.nb_docs, "parcelles": ecrivain.nb_parcelles,
+            "departements": sorted(deps_voulus) if deps_voulus else "France entière",
+        }, f, ensure_ascii=False, indent=1)
 
-        def vider():
-            nonlocal tampon
-            if not tampon:
-                return
-            with cur.copy(
-                "COPY tmp_dfi_brut (dep, com, id_dfi, nature, date_effet, type_parcelle, "
-                "prefixe, section, numero, contenance) FROM STDIN"
-            ) as copie:
-                for ligne in tampon:
-                    copie.write_row(ligne)
-            tampon = []
-
-        for r in lecteur:
-            tampon.append((
-                norm_dep(r[COLONNES["dep"]]),
-                norm_com(r[COLONNES["com"]]),
-                (r[COLONNES["id_dfi"]] or "").strip(),
-                norm_int(r[COLONNES["nature"]]),
-                norm_date(r[COLONNES["date_effet"]]),
-                norm_int(r[COLONNES["type"]]),
-                norm_prefixe(r[COLONNES["prefixe"]]),
-                norm_section(r[COLONNES["section"]]),
-                norm_numero(r[COLONNES["numero"]]),
-                norm_int(r[COLONNES["contenance"]]) if COLONNES["contenance"] else None,
-            ))
-            nb += 1
-            if len(tampon) >= TAILLE_LOT:
-                vider()
-                print(f"  {nb:,} lignes lues".replace(",", " "), end="\r")
-        vider()
-    print(f"\n{nb:,} lignes chargées en table de travail.".replace(",", " "))
-
-    # Purge de l'ancien lot éventuel portant le même identifiant (rejouabilité)
-    cur.execute("DELETE FROM histo_document WHERE lot_source = %s", (lot,))
-
-    # Documents (dédoublonnés sur dep/com/id_dfi)
-    print("Insertion des documents …")
-    cur.execute("""
-        INSERT INTO histo_document (dep, com, id_dfi, nature, date_effet, lot_source)
-        SELECT dep, com, id_dfi,
-               MAX(nature), MAX(date_effet), %s
-        FROM tmp_dfi_brut
-        WHERE id_dfi <> ''
-        GROUP BY dep, com, id_dfi
-        ON CONFLICT (dep, com, id_dfi) DO UPDATE
-            SET nature = EXCLUDED.nature,
-                date_effet = EXCLUDED.date_effet,
-                lot_source = EXCLUDED.lot_source
-    """, (lot,))
-    nb_docs = cur.rowcount
-
-    # Mouvements
-    print("Insertion des mouvements …")
-    cur.execute("""
-        INSERT INTO histo_mouvement
-            (document_id, type_parcelle, dep, com, prefixe, section, numero, contenance_m2, lot_source)
-        SELECT d.id, b.type_parcelle, b.dep, b.com, b.prefixe, b.section, b.numero, b.contenance, %s
-        FROM tmp_dfi_brut b
-        JOIN histo_document d ON d.dep = b.dep AND d.com = b.com AND d.id_dfi = b.id_dfi
-        WHERE b.type_parcelle IN (1, 2)
-    """, (lot,))
-    nb_mvts = cur.rowcount
-
-    cur.execute("""
-        UPDATE histo_chargement
-        SET fin = now(), statut = 'termine', nb_documents = %s, nb_mouvements = %s
-        WHERE id = %s
-    """, (nb_docs, nb_mvts, chargement_id))
-    cx.commit()
-
-    print(f"Terminé : {nb_docs:,} documents, {nb_mvts:,} mouvements (lot {lot}).".replace(",", " "))
-    cur.close()
-    cx.close()
+    fmt = lambda n: f"{n:,}".replace(",", " ")
+    print(f"Terminé : {fmt(ecrivain.nb_communes)} communes, {fmt(ecrivain.nb_docs)} documents, "
+          f"{fmt(ecrivain.nb_parcelles)} parcelles (situation {situation}).")
 
 
 if __name__ == "__main__":

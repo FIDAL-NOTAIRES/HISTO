@@ -254,7 +254,11 @@ document.querySelectorAll(".onglets [role=tab]").forEach(b => b.addEventListener
 /* ---------- accès Drive (autorisation du matin, bibliothèque commune de CONNEXION) ---------- */
 async function jeton() {
   if (!window.FidalAcces) throw new Error("bibliothèque d'accès indisponible");
-  return await FidalAcces.jeton();
+  const j = await FidalAcces.jeton();
+  // acces.js peut rendre le jeton nu ou enveloppé dans un objet : on accepte les deux formes
+  const t = typeof j === "string" ? j : (j?.access_token || j?.token || j?.jeton || j?.accessToken || null);
+  if (!t) throw new Error("non connecté");
+  return t;
 }
 const cacheFichiers = new Map();
 async function lireFichierDrive(nom) {            // retourne l'objet JSON, ou null si absent

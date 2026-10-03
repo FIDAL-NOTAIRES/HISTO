@@ -8,6 +8,7 @@
 <title>HISTO — historique cadastral</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://connexion-omega.vercel.app/acces.js"></script>
 <style>
@@ -44,7 +45,7 @@ label{display:block;font-size:.92rem;color:var(--nuit);margin-bottom:6px}
 input[type=text],textarea{width:100%;padding:10px 12px;border:1px solid var(--trait);border-radius:4px;background:#fff}
 textarea{min-height:80px;resize:vertical}
 .ligne{display:grid;gap:14px;margin-bottom:14px}
-@media(min-width:640px){.ligne.deux{grid-template-columns:1fr 1fr}}
+@media(min-width:640px){.ligne.deux{grid-template-columns:1fr 1fr}.ligne.trois{grid-template-columns:1fr 1fr 1fr}}
 .suggest{position:relative}
 .suggest ul{position:absolute;left:0;right:0;top:100%;z-index:5;background:#fff;border:1px solid var(--trait);border-top:0;list-style:none;max-height:220px;overflow:auto;display:none}
 .suggest ul li{padding:8px 12px;cursor:pointer}
@@ -217,10 +218,16 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
   <!-- ======== Résultats ======== -->
   <section id="resultats">
     <h2>Filiation</h2>
+    <div class="ligne trois" style="margin-bottom:10px">
+      <div><label for="dossier">Référence du dossier</label><input type="text" id="dossier" placeholder="2026-0412"></div>
+      <div><label for="client">Client</label><input type="text" id="client" placeholder="SA LOGIS MÉTROPOLE"></div>
+      <div><label for="collab">Collaborateur (version de travail)</label><input type="text" id="collab" placeholder="Prénom Nom"></div>
+    </div>
     <div class="boutons-sortie">
       <button class="bouton" id="btn-word-travail">Document de travail (Word)</button>
       <button class="bouton secondaire" id="btn-word-client">Document client (Word)</button>
     </div>
+    <p class="aide">Cochez « remembrement » sur le maillon d'arrêt quand vous savez que la parcelle d'origine est issue d'un remembrement : il vaut alors origine trentenaire et la consigne d'état hypothécaire complémentaire disparaît.</p>
     <div id="liste-resultats"></div>
   </section>
 </main>
@@ -641,12 +648,12 @@ function afficherResultats(j) {
 
     // ---- étage 2 : le tableau, une ligne par mouvement ----
     html += `<div class="tableau"><table class="mvts"><thead><tr>
-      <th>N°</th><th>Parcelle</th><th>Opération</th><th>Année</th><th>Nature du document</th><th>Identifiant</th><th>Lot</th><th>Préfixe</th><th>Parcelles d'origine</th><th>Parcelles sœurs</th>
+      <th>N°</th><th>Parcelle</th><th>Opération</th><th>Année</th><th>Nature du document</th><th>Identifiant</th><th>Lot</th><th>Préfixe</th><th>Parcelles d'origine</th><th>Parcelles sœurs</th><th>Remembrement</th>
     </tr></thead><tbody>`;
     let damierPose = false;
     for (const m of res.maillons) {
       if (!damierPose && m.document.au_dela_30_ans) {
-        html += `<tr class="damier"><td colspan="10"><span>au-delà de trente ans</span></td></tr>`; damierPose = true;
+        html += `<tr class="damier"><td colspan="11"><span>au-delà de trente ans</span></td></tr>`; damierPose = true;
       }
       html += `<tr class="${m.couleur}">
         <td class="n">${m.num}</td>
@@ -659,9 +666,10 @@ function afficherResultats(j) {
         <td>${m.parcelle.prefixe}</td>
         <td class="origines">${m.parcelles_origine.map(o => `<div>${o.libelle}${surf(o.contenance_m2)}</div>`).join("")}</td>
         <td class="soeurs">${m.parcelles_soeurs.map(s => `${s.libelle}${surf(s.contenance_m2)}`).join("<br>")}</td>
+        <td><input type="checkbox" class="remembrement" data-ref="${cleRef(res.reference)}" data-num="${m.num}" aria-label="remembrement"></td>
       </tr>`;
       if (m.surfaces.signale) {
-        html += `<tr class="jaune"><td></td><td colspan="9"><div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div></td></tr>`;
+        html += `<tr class="jaune"><td></td><td colspan="10"><div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div></td></tr>`;
       }
     }
     html += `</tbody></table></div></article>`;
@@ -693,11 +701,160 @@ function tracerFrises() {
 }
 window.addEventListener("resize", tracerFrises);
 
-/* ---------- sorties Word (branchées à l'étape suivante) ---------- */
+/* ============================================================
+   SORTIES WORD — deux versions (travail / client), un seul document pour le lot
+   Arbitrages du 02/10/2026 : phrase rédigée par maillon dans les deux versions ;
+   tableau complet (travail) ou allégé (client : année, nature, mère → fille) ;
+   marqueur des trente ans conservé ; écart de surface retiré du client ;
+   arrêt avant trente ans : travail = jaune + consigne EHF complémentaire,
+   client = phrase neutre ; case « remembrement » = origine trentenaire, vert ;
+   pied de page citant la DGFiP et la date de la situation chargée.
+   ============================================================ */
 document.getElementById("btn-word-travail").addEventListener("click", () => genererWord("travail"));
 document.getElementById("btn-word-client").addEventListener("click", () => genererWord("client"));
-function genererWord(version) {
-  montrerErreur(`La génération du document ${version} sera disponible à la prochaine livraison.`);
+
+const MOIS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+function dateLongue(iso) { const d = new Date(iso); return `${d.getDate()} ${MOIS[d.getMonth()]} ${d.getFullYear()}`; }
+function situationLongue(sit) { const [a, m] = String(sit || "").split("-"); return m ? `${MOIS[+m - 1]} ${a}` : (sit || "date inconnue"); }
+function remembrementCoche(res, num) {
+  const cb = document.querySelector(`.remembrement[data-ref="${cleRef(res.reference)}"][data-num="${num}"]`);
+  return !!(cb && cb.checked);
+}
+// Phrase rédigée d'un maillon — même formulation dans les deux versions
+function phraseMaillon(m) {
+  const quand = m.document.date_effet ? ` le ${dateLongue(m.document.date_effet)}` : (m.document.annee ? ` en ${m.document.annee}` : "");
+  const nat = m.document.nature_libelle;
+  const origines = m.parcelles_origine.map(o => o.libelle).join(", ");
+  const soeurs = m.parcelles_soeurs.map(x => x.libelle);
+  let p;
+  switch (m.operation) {
+    case "division": p = `La parcelle ${m.parcelle.libelle} provient de la division de la parcelle ${origines}, constatée par ${nat}${quand}`; break;
+    case "réunion": p = `La parcelle ${m.parcelle.libelle} provient de la réunion des parcelles ${origines}, constatée par ${nat}${quand}`; break;
+    case "remaniement parcellaire": p = `La parcelle ${m.parcelle.libelle} est issue d'un remaniement parcellaire portant sur les parcelles ${origines}, constaté par ${nat}${quand}`; break;
+    case "extraction du domaine non cadastré": p = `La parcelle ${m.parcelle.libelle} a été extraite du domaine non cadastré par ${nat}${quand}`; break;
+    default: p = `La parcelle ${m.parcelle.libelle} résulte de la renumérotation de la parcelle ${origines}, constatée par ${nat}${quand}`;
+  }
+  if (soeurs.length) p += soeurs.length === 1 ? ` ; elle a pour parcelle sœur ${soeurs[0]}` : ` ; elle a pour parcelles sœurs ${soeurs.join(", ")}`;
+  return p + ".";
+}
+
+async function genererWord(version) {
+  cacherErreur();
+  if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
+  if (!window.docx) return montrerErreur("La bibliothèque de génération Word n'est pas chargée (réseau ?).");
+  const D = window.docx, travail = version === "travail";
+  const dossier = document.getElementById("dossier").value.trim(), client = document.getElementById("client").value.trim(), collab = document.getElementById("collab").value.trim();
+  const sit = (await lireFichierDrive(`${PREFIXE_FICHIER}situation.json`).catch(() => null))?.situation;
+  const anneeCourante = new Date().getFullYear();
+  const NUIT = "0F2238", CANARD = "33838B", JAUNE = "FFE764", VERT = "2E8B57";
+
+  const T = (text, o = {}) => new D.TextRun({ text, font: "Segoe UI", size: 20, color: NUIT, ...o });
+  const P = (text, o = {}) => new D.Paragraph({ children: [T(text, o.run || {})], spacing: { after: 120 }, ...o.par });
+  const H = (text, niveau) => new D.Paragraph({ heading: niveau, children: [new D.TextRun({ text, font: "Georgia", color: NUIT, bold: false, size: niveau === D.HeadingLevel.HEADING_1 ? 32 : 26 })], spacing: { before: 240, after: 120 } });
+  const encadre = (text, fond) => new D.Paragraph({ children: [T(text)], shading: { type: D.ShadingType.CLEAR, fill: fond, color: "auto" }, spacing: { after: 160 }, indent: { left: 200, right: 200 } });
+  const cellule = (text, o = {}) => new D.TableCell({ children: [new D.Paragraph({ children: [T(text, { size: 18, ...(o.run || {}) })] })], shading: o.fond ? { type: D.ShadingType.CLEAR, fill: o.fond, color: "auto" } : undefined, margins: { top: 60, bottom: 60, left: 80, right: 80 }, width: o.largeur ? { size: o.largeur, type: D.WidthType.DXA } : undefined });
+  // largeurs en vingtièmes de point : page A4 moins marges de 2 cm = 9 638
+  const LARG_TRAVAIL = [480, 980, 1060, 640, 1500, 1000, 640, 700, 1500, 1138], LARG_CLIENT = [900, 3400, 5338];
+  const tableau = (lignes, largeurs) => new D.Table({ width: { size: largeurs.reduce((a, b) => a + b, 0), type: D.WidthType.DXA }, columnWidths: largeurs, rows: lignes.map((cells, i) => new D.TableRow({ tableHeader: i === 0, children: cells })) });
+
+  // --- regroupement : commune → section → parcelles en ordre numérique (unités foncières : à venir, hors groupe pour l'instant)
+  const groupes = new Map();
+  for (const res of etat.resultats.resultats) {
+    const r = res.reference, kc = `${r.dep}${r.com}`;
+    if (!groupes.has(kc)) groupes.set(kc, { nom: nomCommune(r), dep: r.dep, sections: new Map() });
+    const g = groupes.get(kc);
+    if (!g.sections.has(r.section)) g.sections.set(r.section, []);
+    g.sections.get(r.section).push(res);
+  }
+  for (const g of groupes.values()) for (const l of g.sections.values()) l.sort((a, b) => +a.reference.numero - +b.reference.numero);
+
+  const corps = [];
+  // --- page de garde
+  corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Georgia", size: 56, color: NUIT })], spacing: { before: 2400, after: 400 }, alignment: D.AlignmentType.CENTER }));
+  for (const g of groupes.values()) {
+    const refs = [...g.sections.values()].flat().map(x => x.reference.libelle).join(", ");
+    corps.push(new D.Paragraph({ children: [T(`Commune de ${g.nom} (${g.dep}) — ${refs}`, { size: 24 })], alignment: D.AlignmentType.CENTER, spacing: { after: 120 } }));
+  }
+  corps.push(new D.Paragraph({ children: [T([dossier ? `Dossier ${dossier}` : "", client].filter(Boolean).join(" — "), { size: 24 })], alignment: D.AlignmentType.CENTER, spacing: { before: 400, after: 120 } }));
+  corps.push(new D.Paragraph({ children: [T(`Établi le ${dateLongue(new Date().toISOString())}`)], alignment: D.AlignmentType.CENTER }));
+  if (travail && collab) corps.push(new D.Paragraph({ children: [T(`Validé par ${collab}`, { italics: true })], alignment: D.AlignmentType.CENTER, spacing: { before: 120 } }));
+  if (travail) corps.push(new D.Paragraph({ children: [T("Document de travail — usage interne", { color: "A01040", bold: true })], alignment: D.AlignmentType.CENTER, spacing: { before: 600 } }));
+  corps.push(new D.Paragraph({ children: [new D.PageBreak()] }));
+
+  // --- sommaire
+  corps.push(H("Sommaire", D.HeadingLevel.HEADING_1));
+  for (const g of groupes.values()) for (const [sec, l] of g.sections) corps.push(P(`Commune de ${g.nom} — section ${sec} : ${l.map(x => x.reference.libelle).join(", ")}`));
+  corps.push(new D.Paragraph({ children: [new D.PageBreak()] }));
+
+  // --- corps : une partie par section
+  for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
+    corps.push(H(`Commune de ${g.nom} — section ${sec}`, D.HeadingLevel.HEADING_1));
+    // (plan colorisé PAINT en tête de partie : brique à venir)
+    for (const res of liste) {
+      const r = res.reference;
+      corps.push(H(`Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, D.HeadingLevel.HEADING_2));
+      if (!res.trouve) {
+        corps.push(travail
+          ? encadre("Aucun mouvement cadastral n'est enregistré pour cette parcelle dans les documents de filiation informatisés : parcelle d'origine, remembrement ou mouvement antérieur à l'informatisation. Un état hypothécaire complémentaire doit être levé pour établir l'origine de propriété.", JAUNE)
+          : P("La filiation ne peut être retracée à partir des données cadastrales disponibles."));
+        continue;
+      }
+      // phrases rédigées, du présent vers le passé, marqueur des trente ans
+      let marqueurPose = false;
+      for (const m of res.maillons) {
+        if (!marqueurPose && m.document.au_dela_30_ans) { corps.push(P("— au-delà de trente ans —", { run: { italics: true, color: CANARD }, par: { alignment: D.AlignmentType.CENTER } })); marqueurPose = true; }
+        corps.push(P(phraseMaillon(m)));
+        if (travail && m.surfaces.signale) corps.push(encadre(`Écart de surface à examiner : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (${m.surfaces.ecart_pct} %).`, JAUNE));
+      }
+      // arrêt de la filiation
+      const dernier = res.maillons[res.maillons.length - 1];
+      const remembrement = remembrementCoche(res, dernier.num);
+      if (remembrement) {
+        corps.push(P(`Les parcelles d'origine ${dernier.parcelles_origine.map(o => o.libelle).join(", ")} sont issues d'un remembrement, qui vaut origine de propriété.`, { run: { color: VERT } }));
+      } else if (!res.franchit_30_ans) {
+        corps.push(travail
+          ? encadre(`La filiation s'arrête en ${dernier.document.annee ?? "date inconnue"}, en deçà des trente ans : un état hypothécaire complémentaire doit être levé.`, JAUNE)
+          : P(`La filiation ne peut être retracée au-delà de ${dernier.document.annee ?? "cette date"} à partir des données cadastrales.`));
+      }
+      // tableau des origines
+      res.maillons.forEach((m, i) => { m.num = i + 1; });
+      const entete = travail
+        ? ["N°", "Parcelle", "Opération", "Année", "Nature", "Identifiant", "Lot", "Préfixe", "Parcelles d'origine", "Parcelles sœurs"]
+        : ["Année", "Nature du document", "Filiation"];
+      const largeurs = travail ? LARG_TRAVAIL : LARG_CLIENT;
+      const lignes = [entete.map((t, i) => cellule(t, { run: { bold: true, color: "FFFFFF" }, fond: NUIT, largeur: largeurs[i] }))];
+      let marqueurTab = false;
+      for (const m of res.maillons) {
+        if (!marqueurTab && m.document.au_dela_30_ans) {
+          lignes.push([new D.TableCell({ columnSpan: entete.length, children: [new D.Paragraph({ children: [T("au-delà de trente ans", { italics: true, size: 16, color: CANARD })], alignment: D.AlignmentType.CENTER })], shading: { type: D.ShadingType.CLEAR, fill: "E6ECF2", color: "auto" } })]);
+          marqueurTab = true;
+        }
+        const fond = travail && m.surfaces.signale ? JAUNE : undefined;
+        lignes.push(travail
+          ? [String(m.num), m.parcelle.libelle, m.operation, String(m.document.annee ?? ""), m.document.nature_libelle, m.document.id_dfi, m.document.lot ?? "", m.parcelle.prefixe, m.parcelles_origine.map(o => o.libelle).join(", "), m.parcelles_soeurs.map(x => x.libelle).join(", ")].map((t, i) => cellule(t, { fond, largeur: largeurs[i] }))
+          : [String(m.document.annee ?? ""), m.document.nature_libelle, `${m.parcelles_origine.map(o => o.libelle).join(", ")} → ${m.parcelle.libelle}`].map((t, i) => cellule(t, { largeur: largeurs[i] })));
+      }
+      corps.push(tableau(lignes, largeurs));
+      corps.push(P(""));
+    }
+    corps.push(new D.Paragraph({ children: [new D.PageBreak()] }));
+  }
+  corps.pop(); // pas de saut de page final
+
+  const pied = new D.Footer({ children: [new D.Paragraph({ children: [T(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, { size: 16, color: "5B6B7B" })], alignment: D.AlignmentType.CENTER })] });
+
+  const doc = new D.Document({
+    creator: "FIDAL Notaires — HISTO", title: "Origine cadastrale",
+    styles: { default: { document: { run: { font: "Segoe UI", size: 20, color: NUIT } } } },
+    sections: [{ properties: { page: { margin: { top: 1134, bottom: 1134, left: 1134, right: 1134 } } }, footers: { default: pied }, children: corps }],
+  });
+  const blob = await D.Packer.toBlob(doc);
+  const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `Origine cadastrale — ${nomBase} — ${travail ? "travail" : "client"} — ${new Date().toISOString().slice(0, 10)}.docx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 /* ---------- erreurs ---------- */

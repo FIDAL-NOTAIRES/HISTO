@@ -262,12 +262,16 @@ async function lireFichierDrive(nom) {            // retourne l'objet JSON, ou n
   const t = await jeton();
   let q = `name = '${nom}' and trashed = false`;
   if (DRIVE_DOSSIER_HISTO_ID) q += ` and '${DRIVE_DOSSIER_HISTO_ID}' in parents`;
-  const liste = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=1&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+  // corpora=allDrives : le dossier HISTO peut vivre dans un Drive partagé
+  const liste = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=1&corpora=allDrives&supportsAllDrives=true&includeItemsFromAllDrives=true`,
     { headers: { Authorization: `Bearer ${t}` } }).then(r => r.json());
+  if (liste.error) throw new Error(`Drive : ${liste.error.message || liste.error.status || "erreur"}`);
   const f = liste.files?.[0];
   if (!f) { cacheFichiers.set(nom, null); return null; }
-  const contenu = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`,
-    { headers: { Authorization: `Bearer ${t}` } }).then(r => r.json());
+  const rep = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`,
+    { headers: { Authorization: `Bearer ${t}` } });
+  if (!rep.ok) throw new Error(`Drive : lecture de ${nom} refusée (${rep.status})`);
+  const contenu = await rep.json();
   cacheFichiers.set(nom, contenu);
   return contenu;
 }
@@ -277,7 +281,7 @@ lireFichierDrive(`${PREFIXE_FICHIER}situation.json`)
       ? `Données DGFiP : situation ${sit.situation}, ${Number(sit.communes).toLocaleString("fr-FR")} communes`
       : "Données : aucune situation chargée sur le Drive";
   })
-  .catch(() => { document.getElementById("etatbase").textContent = "Données : Drive non connecté — ouvrez MORNING"; });
+  .catch(e => { document.getElementById("etatbase").textContent = /Drive :/.test(e.message) ? `Données : ${e.message}` : "Données : Drive non connecté — ouvrez MORNING"; });
 
 /* ---------- suggestions de communes (fichier des communes) ---------- */
 function brancherCommune(inputId, listeId, aideId, cle) {

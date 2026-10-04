@@ -127,6 +127,15 @@ tr.damier td{padding:0;height:12px;border:0;
 tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:var(--nuit);background:var(--papier);padding:2px 8px;width:max-content}
 
 .boutons-sortie{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 8px}
+/* ---- plans PAINT : progression et cadre de reprise manuelle ---- */
+#paint-zone{display:none;margin:12px 0 18px;background:var(--papier);border:1px solid var(--trait);border-radius:6px;padding:14px 18px}
+#paint-zone.actif{display:block}
+#paint-etat{font-size:.92rem;color:var(--nuit)}
+#paint-cadre{display:none;margin-top:12px;border:3px solid var(--orange);border-radius:6px;overflow:hidden;background:#fff}
+#paint-cadre.visible{display:block}
+#paint-cadre iframe{width:100%;height:78vh;border:0;display:block}
+#paint-consigne{background:#FFF3C4;border-left:4px solid var(--orange);padding:10px 14px;border-radius:3px;margin-bottom:10px;font-size:.92rem}
+.miniplan{max-width:100%;max-height:260px;border:1px solid var(--trait);border-radius:4px;margin:6px 0 10px;display:block}
 #attente{display:none;margin-top:22px;color:var(--nuit)}
 .erreur{background:#FBE9EE;border-left:4px solid var(--carmin);padding:10px 14px;border-radius:3px;margin-top:14px}
 </style>
@@ -226,6 +235,10 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
     <div class="boutons-sortie">
       <button class="bouton" id="btn-word-travail">Document de travail (Word)</button>
       <button class="bouton secondaire" id="btn-word-client">Document client (Word)</button>
+    </div>
+    <div id="paint-zone">
+      <div id="paint-etat"></div>
+      <div id="paint-cadre"><div id="paint-consigne"></div></div>
     </div>
     <p class="aide">Cochez « remembrement » sur le maillon d'arrêt quand vous savez que la parcelle d'origine est issue d'un remembrement : il vaut alors origine trentenaire et la consigne d'état hypothécaire complémentaire disparaît.</p>
     <div id="liste-resultats"></div>
@@ -592,6 +605,7 @@ function nomCommune(ref) { const r = etat.refs.find(x => x.dep === ref.dep && x.
 
 function afficherResultats(j) {
   friseATracer.length = 0;
+  etat.plans = null; zonePaint().classList.remove("actif");
   const zone = document.getElementById("liste-resultats");
   const anneeCourante = new Date().getFullYear();
   zone.innerHTML = j.resultats.map(res => {
@@ -702,6 +716,173 @@ function tracerFrises() {
 window.addEventListener("resize", tracerFrises);
 
 /* ============================================================
+   PLANS PAINT — un plan colorisé en tête de chaque section du Word
+   ------------------------------------------------------------
+   Décisions des 01 et 02/10/2026 : plan systématique quel que soit le format,
+   un plan par section (plusieurs vues rapprochées si les parcelles sont
+   dispersées), seules les parcelles étudiées colorisées, couleur de PAINT,
+   simple repère de situation. Échec de PAINT → on bloque et le collaborateur
+   colorie à la main dans le cadre, puis « Transmettre à HISTO ».
+   PAINT est ouvert dans un cadre de cette page (origine différente) et le
+   dialogue passe par messages, grâce à histo-pont.js côté PAINT.
+   ============================================================ */
+const PAINT_URL = "https://paint-blue.vercel.app/index.html";
+const PAINT_ORIGINE = new URL(PAINT_URL).origin;
+const CADASTRE_REF = "https://apicarto.ign.fr/api/cadastre/parcelle";
+
+/* --- projection conique conforme (mêmes formules que PAINT/REDPAR, vérifiées contre pyproj) --- */
+const CC = { a: 6378137.0, e: Math.sqrt(2 / 298.257222101 - Math.pow(1 / 298.257222101, 2)), lon0: 3.0 * Math.PI / 180 };
+function ccParams(zz) {
+  const e = CC.e, e2 = e * e, rad = d => d * Math.PI / 180;
+  const lat0 = rad(zz), lat1 = rad(zz - 0.75), lat2 = rad(zz + 0.75);
+  const m = p => Math.cos(p) / Math.sqrt(1 - e2 * Math.pow(Math.sin(p), 2));
+  const t = p => Math.tan(Math.PI / 4 - p / 2) / Math.pow((1 - e * Math.sin(p)) / (1 + e * Math.sin(p)), e / 2);
+  const n = Math.log(m(lat1) / m(lat2)) / Math.log(t(lat1) / t(lat2));
+  const F = m(lat1) / (n * Math.pow(t(lat1), n));
+  return { n, F, r0: CC.a * F * Math.pow(t(lat0), n), x0: 1700000, y0: (zz - 41) * 1e6 + 200000 };
+}
+function projeterCC(lon, lat, zz) {
+  const P = ccParams(zz), e = CC.e, p = lat * Math.PI / 180;
+  const t = Math.tan(Math.PI / 4 - p / 2) / Math.pow((1 - e * Math.sin(p)) / (1 + e * Math.sin(p)), e / 2);
+  const r = CC.a * P.F * Math.pow(t, P.n), th = P.n * (lon * Math.PI / 180 - CC.lon0);
+  return [P.x0 + r * Math.sin(th), P.y0 + P.r0 - r * Math.cos(th)];
+}
+const zoneDeLat = lat => Math.min(50, Math.max(42, Math.round(lat)));
+
+/* --- échelle et format d'un plan d'après l'emprise (mètres), plancher 1/1000 --- */
+const EMPRISES_1000 = { "A4|portrait": [195.5, 211.0], "A4|paysage": [210.7, 197.0], "A3|portrait": [281.5, 301.0], "A3|paysage": [316.0, 283.0] };
+const ECHELLES_PLAN = [1000, 1250, 1500, 2000, 2500];   // au-delà : plusieurs vues rapprochées
+function choisirEchelle(w, h) {
+  for (const e of ECHELLES_PLAN) for (const f of ["A4|portrait", "A4|paysage", "A3|portrait", "A3|paysage"]) {
+    const [ew, eh] = EMPRISES_1000[f];
+    if (w * 1.10 <= ew * e / 1000 && h * 1.10 <= eh * e / 1000) return { echelle: String(e), format: f };
+  }
+  return null;
+}
+
+/* --- contours des parcelles d'une section (cadastre IGN), projetés --- */
+async function contoursSection(refs) {
+  const out = [];
+  for (const r of refs) {
+    try {
+      const insee = r.dep.length === 3 ? r.dep + r.com.slice(1) : r.dep + r.com;
+      const u = `${CADASTRE_REF}?code_insee=${insee}&section=${encodeURIComponent(r.section.padStart(2, "0"))}&numero=${r.numero}&com_abs=${r.prefixe}`;
+      const f = (await fetch(u).then(x => x.json())).features?.[0];
+      if (!f) { out.push({ ref: r, anneaux: null }); continue; }
+      const g = f.geometry, anneaux = g.type === "Polygon" ? [g.coordinates[0]] : g.type === "MultiPolygon" ? g.coordinates.map(poly => poly[0]) : [];
+      const lat = anneaux[0]?.[0]?.[1], zz = zoneDeLat(lat);
+      out.push({ ref: r, zz, contenance: f.properties?.contenance ?? null,
+                 anneaux: anneaux.map(a => a.map(([lo, la]) => projeterCC(lo, la, zz))) });
+    } catch { out.push({ ref: r, anneaux: null }); }
+  }
+  return out;
+}
+function boite(pts) { const xs = pts.map(q => q[0]), ys = pts.map(q => q[1]); return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) }; }
+
+/* --- regroupement en vues : une vue si tout tient à 1/2500, sinon vues rapprochées --- */
+function grouperEnVues(contours) {
+  const avec = contours.filter(c => c.anneaux && c.anneaux.length);
+  if (!avec.length) return [];
+  const vues = [];
+  const reste = [...avec].sort((a, b) => boite(a.anneaux.flat()).x0 - boite(b.anneaux.flat()).x0);
+  while (reste.length) {
+    const vue = [reste.shift()];
+    for (let i = 0; i < reste.length;) {
+      const essai = boite([...vue, reste[i]].flatMap(c => c.anneaux.flat()));
+      if (choisirEchelle(essai.x1 - essai.x0, essai.y1 - essai.y0)) { vue.push(reste.splice(i, 1)[0]); } else i++;
+    }
+    vues.push(vue);
+  }
+  return vues;
+}
+
+/* --- chaîne de paramètres pour PAINT (contrat d'URL de REDPAR) --- */
+function parametresPaint(vue, communeNom) {
+  const r0 = vue[0].ref, zz = vue[0].zz;
+  const pts = vue.flatMap(c => c.anneaux.flat()), b = boite(pts);
+  const w = Math.round((b.x1 - b.x0) * 10) / 10, h = Math.round((b.y1 - b.y0) * 10) / 10;
+  const ef = choisirEchelle(w, h) || { echelle: "2500", format: "A3|paysage" };
+  const cx = ((b.x0 + b.x1) / 2).toFixed(1), cy = ((b.y0 + b.y1) / 2).toFixed(1);
+  const insee = r0.dep.length === 3 ? r0.dep + r0.com.slice(1) : r0.dep + r0.com;
+  const poly = vue.map(c => c.anneaux.map(a => a.map(q => q[0].toFixed(2) + "," + q[1].toFixed(2)).join(";")).join("~")).join("|");
+  const tab = vue.map(c => `${c.ref.section},${String(c.ref.numero).replace(/^0+/, "")},${c.contenance != null ? c.contenance + " m²" : ""}`).join(";");
+  const q = new URLSearchParams({
+    commune: insee, nomCommune: communeNom || "", prefixe: r0.prefixe, section: r0.section, parcelle: r0.numero,
+    echelle: ef.echelle, format: ef.format, x: cx, y: cy, pt: `${cx},${cy}`, dim: `${w}x${h}`, poly, tab, auto: "1",
+  });
+  if (vue.length === 1 && vue[0].contenance != null) q.set("surface", String(vue[0].contenance));
+  return q.toString();
+}
+
+/* --- dialogue avec PAINT dans un cadre --- */
+const zonePaint = () => document.getElementById("paint-zone");
+function etatPaint(txt) { zonePaint().classList.add("actif"); document.getElementById("paint-etat").textContent = txt; }
+
+function demanderPlan(qs, libelle) {
+  return new Promise(resolve => {
+    const cadre = document.getElementById("paint-cadre"), consigne = document.getElementById("paint-consigne");
+    const ifr = document.createElement("iframe");
+    ifr.src = `${PAINT_URL}?charge=histo&cb=${Date.now()}`;
+    ifr.title = "PAINT";
+    cadre.appendChild(ifr);
+    let fini = false;
+    const terminer = (res) => {
+      if (fini) return; fini = true;
+      window.removeEventListener("message", ecoute); clearTimeout(garde);
+      cadre.classList.remove("visible"); ifr.remove(); resolve(res);
+    };
+    const ecoute = (e) => {
+      if (e.origin !== PAINT_ORIGINE || e.source !== ifr.contentWindow) return;
+      const d = e.data || {};
+      if (d.type === "paint-pret") ifr.contentWindow.postMessage({ type: "paint-params", qs }, PAINT_ORIGINE);
+      else if (d.type === "paint-image") terminer({ ok: true, png: d.png, largeur: d.largeur, hauteur: d.hauteur, manuel: d.manuel, reserve: d.reserve });
+      else if (d.type === "paint-echec") terminer({ ok: false, message: d.message });
+      else if (d.type === "paint-attente-manuelle") {
+        // décision du 01/10 : on bloque, le collaborateur colorie à la main dans PAINT puis transmet
+        consigne.textContent = `PAINT n'a pas pu coloriser automatiquement ${libelle} (${d.reserve}). Coloriez les parcelles à la main dans le plan ci-dessous, puis cliquez « Transmettre à HISTO » en haut à droite du plan.`;
+        cadre.classList.add("visible");
+        etatPaint(`${libelle} : reprise à la main dans PAINT.`);
+      }
+    };
+    window.addEventListener("message", ecoute);
+    const garde = setTimeout(() => { if (!cadre.classList.contains("visible")) terminer({ ok: false, message: "PAINT ne répond pas" }); }, 300000);
+  });
+}
+
+/* --- tous les plans du lot (mis en cache sur le résultat) --- */
+async function assurerPlans() {
+  if (!etat.resultats) return [];
+  if (etat.plans) return etat.plans;
+  const sections = new Map();   // clé commune+section → [refs]
+  for (const res of etat.resultats.resultats) {
+    const r = res.reference, k = `${r.dep}${r.com}|${r.section}`;
+    if (!sections.has(k)) sections.set(k, []);
+    sections.get(k).push(r);
+  }
+  const plans = [];   // {cle, section, communeNom, vues:[{png,...}]}
+  let i = 0;
+  for (const [cle, refs] of sections) {
+    i++;
+    const communeNom = nomCommune(refs[0]);
+    etatPaint(`Plan PAINT ${i} sur ${sections.size} — section ${refs[0].section} de ${communeNom} : contours cadastraux…`);
+    const contours = await contoursSection(refs);
+    const vues = grouperEnVues(contours);
+    const images = [];
+    for (let v = 0; v < vues.length; v++) {
+      const libelle = `section ${refs[0].section} de ${communeNom}${vues.length > 1 ? `, vue ${v + 1} sur ${vues.length}` : ""}`;
+      etatPaint(`Plan PAINT ${i} sur ${sections.size} — ${libelle} : colorisation…`);
+      const res = await demanderPlan(parametresPaint(vues[v], communeNom), libelle);
+      if (!res.ok) throw new Error(`plan de la ${libelle} non obtenu (${res.message}). Le document n'est pas généré.`);
+      images.push(res);
+    }
+    plans.push({ cle, section: refs[0].section, communeNom, vues: images, sansContour: contours.filter(c => !c.anneaux).map(c => c.ref.libelle || `${c.ref.section} ${c.ref.numero}`) });
+  }
+  etatPaint(`${plans.length} plan(s) PAINT obtenu(s).`);
+  etat.plans = plans;
+  return plans;
+}
+
+/* ============================================================
    SORTIES WORD — deux versions (travail / client), un seul document pour le lot
    Arbitrages du 02/10/2026 : phrase rédigée par maillon dans les deux versions ;
    tableau complet (travail) ou allégé (client : année, nature, mère → fille) ;
@@ -743,6 +924,9 @@ async function genererWord(version) {
   if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
   if (!window.docx) return montrerErreur("La bibliothèque de génération Word n'est pas chargée (réseau ?).");
   const D = window.docx, travail = version === "travail";
+  let plans;
+  try { plans = await assurerPlans(); }
+  catch (e) { montrerErreur(e.message); return; }
   const dossier = document.getElementById("dossier").value.trim(), client = document.getElementById("client").value.trim(), collab = document.getElementById("collab").value.trim();
   const sit = (await lireFichierDrive(`${PREFIXE_FICHIER}situation.json`).catch(() => null))?.situation;
   const anneeCourante = new Date().getFullYear();
@@ -789,7 +973,14 @@ async function genererWord(version) {
   // --- corps : une partie par section
   for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
     corps.push(H(`Commune de ${g.nom} — section ${sec}`, D.HeadingLevel.HEADING_1));
-    // (plan colorisé PAINT en tête de partie : brique à venir)
+    // plan(s) colorisé(s) PAINT en tête de partie — dans les deux versions, couleur de PAINT
+    const plan = plans.find(x => x.cle === `${liste[0].reference.dep}${liste[0].reference.com}|${sec}`);
+    for (const v of (plan?.vues || [])) {
+      const octets = Uint8Array.from(atob(v.png.split(",")[1]), ch => ch.charCodeAt(0));
+      const largeurPt = 600, hauteurPt = Math.round(largeurPt * v.hauteur / v.largeur);
+      corps.push(new D.Paragraph({ children: [new D.ImageRun({ data: octets, transformation: { width: largeurPt, height: Math.min(hauteurPt, 760) } })], alignment: D.AlignmentType.CENTER, spacing: { after: 160 } }));
+    }
+    if (plan?.sansContour?.length) corps.push(P(`Sans contour au plan cadastral : ${plan.sansContour.join(", ")}.`, { run: { italics: true, color: "5B6B7B" } }));
     for (const res of liste) {
       const r = res.reference;
       corps.push(H(`Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, D.HeadingLevel.HEADING_2));

@@ -282,6 +282,24 @@ async function jeton() {
   return t;
 }
 const cacheFichiers = new Map();
+/* Papier à en-tête (arbitrage JFD du 04/10/2026) : logo FIDAL NOTAIRES et Marianne
+   sont lus sur le Drive au moment de la génération, avec le jeton déjà obtenu —
+   mêmes fichiers que le modèle de courrier du cabinet (mémoire FIDAL colors).
+   Si une image manque, le document se fait sans elle (en-tête texte de repli). */
+const DRIVE_LOGO_FIDAL_ID = "1rmqrW3gFw9_S7rHzCeuVO1rhkbMPznXv";   // 432 × 164 px
+const DRIVE_MARIANNE_ID   = "1cl1BtO48H4DYbZWw3aqkMQMqz5XGBfTM";   // 471 × 407 px
+const cacheImages = new Map();
+async function lireImageDrive(id) {                 // Uint8Array, ou null si illisible
+  if (cacheImages.has(id)) return cacheImages.get(id);
+  let octets = null;
+  try {
+    const t = await jeton();
+    const rep = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${t}` } });
+    if (rep.ok) octets = new Uint8Array(await rep.arrayBuffer());
+  } catch (_) { /* repli silencieux */ }
+  cacheImages.set(id, octets);
+  return octets;
+}
 async function lireFichierDrive(nom) {            // retourne l'objet JSON, ou null si absent
   if (cacheFichiers.has(nom)) return cacheFichiers.get(nom);
   const t = await jeton();
@@ -845,7 +863,7 @@ function demanderPlan(qs, libelle) {
       }
     };
     window.addEventListener("message", ecoute);
-    const garde = setTimeout(() => { if (!cadre.classList.contains("visible")) terminer({ ok: false, message: "PAINT ne répond pas" }); }, 300000);
+    const garde = setTimeout(() => { if (!cadre.classList.contains("visible")) terminer({ ok: false, message: "PAINT ne répond pas" }); }, 15 * 60 * 1000);
   });
 }
 
@@ -954,10 +972,19 @@ async function genererWord(version) {
 
   const corps = [];
   // --- page de garde
-  corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Georgia", size: 56, color: NUIT })], spacing: { before: 2400, after: 400 }, alignment: D.AlignmentType.CENTER }));
+  corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Georgia", size: 56, color: NUIT })], spacing: { before: 1600, after: 400 }, alignment: D.AlignmentType.CENTER }));
+  // sous chaque commune, les parcelles en TABLEAU (arbitrage JFD du 04/10/2026) : préfixe, section, numéro, contenance
+  const LARG_GARDE = [1300, 1300, 1300, 2000];
+  const celluleCentree = (text, o = {}) => new D.TableCell({ children: [new D.Paragraph({ children: [T(text, { size: 20, ...(o.run || {}) })], alignment: D.AlignmentType.CENTER })], shading: o.fond ? { type: D.ShadingType.CLEAR, fill: o.fond, color: "auto" } : undefined, margins: { top: 70, bottom: 70, left: 100, right: 100 }, width: { size: o.largeur, type: D.WidthType.DXA } });
   for (const g of groupes.values()) {
-    const refs = [...g.sections.values()].flat().map(x => x.reference.libelle).join(", ");
-    corps.push(new D.Paragraph({ children: [T(`Commune de ${g.nom} (${g.dep}) — ${refs}`, { size: 24 })], alignment: D.AlignmentType.CENTER, spacing: { after: 120 } }));
+    corps.push(new D.Paragraph({ children: [T(`Commune de ${g.nom} (${g.dep})`, { size: 26 })], alignment: D.AlignmentType.CENTER, spacing: { before: 240, after: 160 } }));
+    const lignesGarde = [["Préfixe", "Section", "Numéro", "Contenance"].map((t, i) => celluleCentree(t, { run: { bold: true, color: "FFFFFF" }, fond: NUIT, largeur: LARG_GARDE[i] }))];
+    for (const res of [...g.sections.values()].flat()) {
+      const r = res.reference;
+      lignesGarde.push([r.prefixe || "000", r.section, String(r.numero).replace(/^0+/, ""), r.contenance_m2 != null ? `${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : "—"].map((t, i) => celluleCentree(t, { largeur: LARG_GARDE[i] })));
+    }
+    corps.push(new D.Table({ alignment: D.AlignmentType.CENTER, width: { size: LARG_GARDE.reduce((a, b) => a + b, 0), type: D.WidthType.DXA }, columnWidths: LARG_GARDE, rows: lignesGarde.map((cells, i) => new D.TableRow({ tableHeader: i === 0, children: cells })) }));
+    corps.push(P(""));
   }
   corps.push(new D.Paragraph({ children: [T([dossier ? `Dossier ${dossier}` : "", client].filter(Boolean).join(" — "), { size: 24 })], alignment: D.AlignmentType.CENTER, spacing: { before: 400, after: 120 } }));
   corps.push(new D.Paragraph({ children: [T(`Établi le ${dateLongue(new Date().toISOString())}`)], alignment: D.AlignmentType.CENTER }));
@@ -1032,12 +1059,37 @@ async function genererWord(version) {
   }
   corps.pop(); // pas de saut de page final
 
-  const pied = new D.Footer({ children: [new D.Paragraph({ children: [T(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, { size: 16, color: "5B6B7B" })], alignment: D.AlignmentType.CENTER })] });
+  // --- papier à en-tête du cabinet (modèle courrier FIDAL, charte v2.2)
+  const GRIS = "657D96";
+  const [logoFidal, marianne] = await Promise.all([lireImageDrive(DRIVE_LOGO_FIDAL_ID), lireImageDrive(DRIVE_MARIANNE_ID)]);
+  const filet = { bottom: { style: D.BorderStyle.SINGLE, size: 6, color: NUIT, space: 6 } };
+  const entete = new D.Header({ children: [new D.Paragraph({
+    children: logoFidal
+      ? [new D.ImageRun({ data: logoFidal, transformation: { width: 110, height: 42 } })]
+      : [new D.TextRun({ text: "FIDAL", font: "Georgia", size: 32, bold: true, color: NUIT }), new D.TextRun({ text: "  NOTAIRES", font: "Segoe UI", size: 22, color: NUIT })],
+    alignment: D.AlignmentType.CENTER, border: filet, spacing: { after: 120 } })] });
+  const ligne = (children, o = {}) => new D.Paragraph({ children, alignment: o.alignment ?? D.AlignmentType.CENTER, spacing: { after: 20 } });
+  const petit = (text, o = {}) => T(text, { size: 16, color: GRIS, ...o });
+  const colonneTexte = [
+    ligne([petit("3 Place de la Madeleine • 75008 PARIS • Tel : 01 44 51 01 23", { size: 18, color: NUIT })]),
+    ligne([petit("www.fidal.notaires.fr", { size: 18, color: NUIT })]),
+    ligne([petit(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`)]),
+    ligne([petit("Page "), new D.TextRun({ children: [D.PageNumber.CURRENT], font: "Segoe UI", size: 16, color: GRIS }), petit(" / "), new D.TextRun({ children: [D.PageNumber.TOTAL_PAGES], font: "Segoe UI", size: 16, color: GRIS })]),
+  ];
+  const sansBordure = { style: D.BorderStyle.NONE, size: 0, color: "FFFFFF" };
+  const bordsNuls = { top: sansBordure, bottom: sansBordure, left: sansBordure, right: sansBordure, insideHorizontal: sansBordure, insideVertical: sansBordure };
+  const pied = new D.Footer({ children: [new D.Table({
+    width: { size: 9638, type: D.WidthType.DXA }, columnWidths: marianne ? [1300, 8338] : [9638], borders: bordsNuls,
+    rows: [new D.TableRow({ children: [
+      ...(marianne ? [new D.TableCell({ width: { size: 1300, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: [new D.Paragraph({ children: [new D.ImageRun({ data: marianne, transformation: { width: 55, height: 48 } })], alignment: D.AlignmentType.CENTER })] })] : []),
+      new D.TableCell({ width: { size: marianne ? 8338 : 9638, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: colonneTexte }),
+    ] })],
+  })] });
 
   const doc = new D.Document({
     creator: "FIDAL Notaires — HISTO", title: "Origine cadastrale",
     styles: { default: { document: { run: { font: "Segoe UI", size: 20, color: NUIT } } } },
-    sections: [{ properties: { page: { margin: { top: 1134, bottom: 1134, left: 1134, right: 1134 } } }, footers: { default: pied }, children: corps }],
+    sections: [{ properties: { page: { margin: { top: 1134, bottom: 1300, left: 1134, right: 1134, header: 500, footer: 400 } } }, headers: { default: entete }, footers: { default: pied }, children: corps }],
   });
   const blob = await D.Packer.toBlob(doc);
   const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();

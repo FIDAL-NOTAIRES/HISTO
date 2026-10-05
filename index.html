@@ -1407,21 +1407,43 @@ async function contoursSection(refs) {
 }
 function boite(pts) { const xs = pts.map(q => q[0]), ys = pts.map(q => q[1]); return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) }; }
 
-/* --- regroupement en vues : une vue si tout tient à 1/2500, sinon vues rapprochées --- */
+/* --- REGROUPEMENT EN VUES PAR PROXIMITÉ (05/10/2026, arbitrage JFD du matin) ---
+   Ne pas caler sur l'emprise de toute la section : on regroupe les parcelles par
+   proximité géographique, une vue rapprochée par paquet, chacune à son échelle propre
+   (la plus serrée qui la contient, du 1/1 000 au plafond) ; une parcelle isolée a sa
+   propre vue serrée. Méthode : on part d'une vue par parcelle et l'on fusionne pas à
+   pas les deux paquets les plus proches, tant que (1) l'écart entre eux ne dépasse pas
+   ECART_PROXIMITE_M et (2) l'ensemble tient encore au plafond d'échelle.
+   PLAFOND : 1/2 500 (dernier élément d'ECHELLES_PLAN) — confirmé par JFD le 05/10/2026.
+   ECART_PROXIMITE_M : 100 m, valeur de départ choisie par Claude, À JUGER sur le rendu
+   (Attiches, section B) ; plus grand = moins de vues mais plus petites parcelles. */
+const ECART_PROXIMITE_M = 100;
+function ecartBoites(a, b) {
+  const dx = Math.max(0, b.x0 - a.x1, a.x0 - b.x1), dy = Math.max(0, b.y0 - a.y1, a.y0 - b.y1);
+  return Math.hypot(dx, dy);
+}
 function grouperEnVues(contours) {
   const avec = contours.filter(c => c.anneaux && c.anneaux.length);
   if (!avec.length) return [];
-  const vues = [];
-  const reste = [...avec].sort((a, b) => boite(a.anneaux.flat()).x0 - boite(b.anneaux.flat()).x0);
-  while (reste.length) {
-    const vue = [reste.shift()];
-    for (let i = 0; i < reste.length;) {
-      const essai = boite([...vue, reste[i]].flatMap(c => c.anneaux.flat()));
-      if (choisirEchelle(essai.x1 - essai.x0, essai.y1 - essai.y0)) { vue.push(reste.splice(i, 1)[0]); } else i++;
+  let paquets = avec.map(c => ({ membres: [c], b: boite(c.anneaux.flat()) }));
+  for (;;) {
+    let meilleur = null;
+    for (let i = 0; i < paquets.length; i++) for (let j = i + 1; j < paquets.length; j++) {
+      const e = ecartBoites(paquets[i].b, paquets[j].b);
+      if (e > ECART_PROXIMITE_M || (meilleur && e >= meilleur.e)) continue;
+      const u = { x0: Math.min(paquets[i].b.x0, paquets[j].b.x0), x1: Math.max(paquets[i].b.x1, paquets[j].b.x1),
+                  y0: Math.min(paquets[i].b.y0, paquets[j].b.y0), y1: Math.max(paquets[i].b.y1, paquets[j].b.y1) };
+      if (!choisirEchelle(u.x1 - u.x0, u.y1 - u.y0)) continue;     // dépasserait le plafond
+      meilleur = { i, j, e, u };
     }
-    vues.push(vue);
+    if (!meilleur) break;
+    const { i, j, u } = meilleur;
+    paquets[i] = { membres: paquets[i].membres.concat(paquets[j].membres), b: u };
+    paquets.splice(j, 1);
   }
-  return vues;
+  // ordre de lecture stable : d'ouest en est, puis du nord au sud ; parcelles dans l'ordre numérique
+  paquets.sort((a, b) => a.b.x0 - b.b.x0 || b.b.y1 - a.b.y1);
+  return paquets.map(p => p.membres.sort((a, b) => +a.ref.numero - +b.ref.numero));
 }
 
 /* --- chaîne de paramètres pour PAINT (contrat d'URL de REDPAR) --- */

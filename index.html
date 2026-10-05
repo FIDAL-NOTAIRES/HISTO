@@ -691,6 +691,12 @@ function montrerValidation(refs) {
   etat.refs.forEach((r, i) => controleExistence(r).then(c => {
     const td = corps.querySelector(`td[data-c="${i}"]`); if (!td || etat.refs[i] !== r) return;
     const l = libelleControle(c); td.className = `controle ${l.cls}`; td.textContent = l.txt;
+    for (const a of (l.prefixes || [])) {
+      const b = document.createElement("button"); b.className = "bouton secondaire"; b.style.cssText = "margin-left:8px;padding:2px 8px;font-size:.8rem";
+      b.textContent = `Corriger en ${a.prefixe}`;
+      b.addEventListener("click", () => { const refs = etat.refs.map(x => ({ ...x })); refs[i].prefixe = a.prefixe; refs[i].origine = refs[i].origine + " (préfixe corrigé)"; montrerValidation(refs); });
+      td.appendChild(b);
+    }
   }).catch(() => {}));
   corps.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
     const tr = cb.closest("tr"); etat.refs[+tr.dataset.i].retenue = cb.checked; tr.classList.toggle("ecartee", !cb.checked); majCompteur();
@@ -748,7 +754,17 @@ async function controleExistence(refBrute) {
   else if (f === null && idx && commeFille.length) code = "dfi";
   else if (f === null && idx) code = "introuvable";
   else code = "inconnu";
-  return { code, aMouvement: commeFille.length > 0, disparitions };
+  // RECHERCHE DE SECOURS SANS LE PRÉFIXE (05/10/2026, JFD : des introuvables qui ont en fait
+  // été divisées ou regroupées) : la recherche exacte compare aussi le préfixe ; une parcelle
+  // saisie « AP 208 » (préfixe 000) mais enregistrée sous le préfixe d'une commune associée
+  // (fusion de communes) échappait au DFI. On signale l'autre préfixe — sans corriger en silence.
+  let autresPrefixes = [];
+  if (code === "introuvable" && idx?.sansPrefixe) {
+    const m = idx.sansPrefixe.get(`${r.section}-${r.numero}`);
+    if (m) autresPrefixes = [...m.entries()].filter(([pre]) => pre !== r.prefixe).map(([prefixe, roles]) => ({ prefixe, roles: [...roles] }));
+    if (autresPrefixes.length) code = "autre-prefixe";
+  }
+  return { code, aMouvement: commeFille.length > 0, disparitions, autresPrefixes, situation: idx?.situation || null };
 }
 function libelleControle(c) {
   if (!c) return { cls: "attente", txt: "vérification…" };
@@ -757,6 +773,7 @@ function libelleControle(c) {
     return { cls: "disparue", txt: `parcelle disparue${d?.annee ? ` en ${d.annee}` : ""}` }; }
   if (c.code === "dfi") return { cls: "disparue", txt: "absente du plan actuel, connue du DFI" };
   if (c.code === "introuvable") return { cls: "ko", txt: "✗ introuvable — vérifiez la référence" };
+  if (c.code === "autre-prefixe") return { cls: "ko", txt: `✗ introuvable sous ce préfixe — connue du DFI sous le préfixe ${c.autresPrefixes.map(a => a.prefixe).join(" ou ")}`, prefixes: c.autresPrefixes };
   return { cls: "inconnu", txt: "existence non vérifiable" };
 }
 
@@ -836,20 +853,23 @@ function prechargerCommune(c) {
 async function construireIndex(dep, com) {
   const fichier = await lireFichierCommune(`${PREFIXE_FICHIER}${dep}${com}.json`);
   if (!fichier) return null;
-  const parFille = new Map(), parMere = new Map();
+  const parFille = new Map(), parMere = new Map(), sansPrefixe = new Map();
+  const noterPrefixe = (r, role) => { const k = `${r.section}-${r.numero}`;
+    if (!sansPrefixe.has(k)) sansPrefixe.set(k, new Map());
+    const m = sansPrefixe.get(k); m.set(r.prefixe, (m.get(r.prefixe) || new Set()).add(role)); };
   for (const doc of fichier.docs) for (const lot of doc.lots) {
     for (const c of lot.f) {
       const r = cellule(c, dep, com, lot.pre), kk = cleRef(r);
       if (!parFille.has(kk)) parFille.set(kk, []);
-      parFille.get(kk).push({ doc, lot });
+      parFille.get(kk).push({ doc, lot }); noterPrefixe(r, "fille");
     }
     for (const c of lot.m) {
       const r = cellule(c, dep, com, lot.pre), kk = cleRef(r);
       if (!parMere.has(kk)) parMere.set(kk, []);
-      parMere.get(kk).push({ doc, lot });
+      parMere.get(kk).push({ doc, lot }); noterPrefixe(r, "mère");
     }
   }
-  return { parFille, parMere, situation: fichier.situation };
+  return { parFille, parMere, sansPrefixe, situation: fichier.situation };
 }
 
 function ecartSurfaces(meres, filles) {
@@ -905,8 +925,10 @@ async function filiation(refBrute) {
     existence,
     message: trouve ? null : (idx === null
       ? "Aucune donnée DFI chargée pour cette commune sur le Drive."
+      : existence.code === "autre-prefixe"
+      ? `Référence introuvable sous le préfixe ${racine.prefixe} : la même section et le même numéro figurent dans le DFI sous le préfixe ${existence.autresPrefixes.map(a => `${a.prefixe} (comme ${a.roles.join(" et ")})`).join(", ")}, sans doute celui d'une commune associée. Corrigez le préfixe à l'écran de validation et relancez.`
       : existence.code === "introuvable"
-      ? "Référence introuvable : cette parcelle ne figure ni au plan cadastral actuel ni dans les documents de filiation de la commune. Vérifiez la section, le numéro, le préfixe et la commune."
+      ? `Référence introuvable : cette parcelle ne figure ni au plan cadastral actuel ni dans les documents de filiation de la commune (sous aucun préfixe). Vérifiez la section, le numéro et la commune. Si elle a été divisée ou regroupée après ${situationLongue(idx?.situation)}, date des données DFI chargées, le mouvement n'y figure pas encore.`
       : existence.code === "plan"
       ? "Parcelle trouvée au plan cadastral actuel ; aucun mouvement enregistré dans le DFI depuis l'informatisation du cadastre (parcelle d'origine, remembrement ou mouvement antérieur). Recherches à poursuivre via l'état hypothécaire."
       : existence.code === "disparue"
@@ -1015,8 +1037,9 @@ async function designationDuLot() {
    JAUNE — elle s'arrête avant, ou n'est pas trouvée : état hypothécaire
            complémentaire à lever. */
 // les références introuvables (erreur de saisie probable) ne vont dans aucune sortie
-const resultatsUtiles = () => (etat.resultats?.resultats || []).filter(r => r.existence?.code !== "introuvable");
-const resultatsIntrouvables = () => (etat.resultats?.resultats || []).filter(r => r.existence?.code === "introuvable");
+const estIntrouvable = r => ["introuvable", "autre-prefixe"].includes(r.existence?.code);
+const resultatsUtiles = () => (etat.resultats?.resultats || []).filter(r => !estIntrouvable(r));
+const resultatsIntrouvables = () => (etat.resultats?.resultats || []).filter(estIntrouvable);
 function noteDisparition(res) {
   const e = res.existence; if (!e || e.code !== "disparue" || !e.disparitions.length) return "";
   const d = e.disparitions[e.disparitions.length - 1];
@@ -1060,6 +1083,7 @@ function phraseArret(et, travail) {
 }
 function etatTrente(res) {
   if (res.existence?.code === "introuvable") return { couleur: "carmin", motif: "introuvable", texte: "Référence introuvable — ni au plan cadastral actuel ni dans le DFI : vérifiez la référence" };
+  if (res.existence?.code === "autre-prefixe") return { couleur: "carmin", motif: "introuvable", texte: `Référence introuvable sous ce préfixe — connue du DFI sous le préfixe ${res.existence.autresPrefixes.map(a => a.prefixe).join(" ou ")}` };
   if (!res.trouve && res.existence?.code === "plan") return { couleur: "jaune", motif: "absente", texte: "Parcelle trouvée au plan actuel, aucun mouvement dans le DFI — état hypothécaire complémentaire à lever" };
   if (!res.trouve) return { couleur: "jaune", motif: "absente", texte: "Aucune filiation dans le DFI — état hypothécaire complémentaire à lever" };
   const dernier = res.maillons[res.maillons.length - 1];
@@ -1107,7 +1131,7 @@ function afficherResultats(j) {
       </div>`;
     html += `<div class="bandeau-trente" data-k="${cleRef(ref)}"></div>`;
     if (!res.trouve) {
-      html += `<p class="rien${res.existence?.code === "introuvable" ? " carmin" : ""}">${res.message}</p></article>`;
+      html += `<p class="rien${estIntrouvable(res) ? " carmin" : ""}">${res.message}</p></article>`;
       return html;
     }
     // numérotation incrémentale des mouvements, partagée par l'arbre et le tableau

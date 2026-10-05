@@ -122,6 +122,18 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 .boite.actuelle{border-color:var(--nuit);border-width:3px}
 /* couleur du nœud = la plus grave de ses branches */
 .boite.jaune{border-color:var(--jaune-texte)}.boite.orange{border-color:var(--orange)}.boite.vert{border-color:var(--vert)}
+/* PLEIN ÉCRAN de la fiche d'une parcelle (05/10/2026, JFD : « sinon ça coupe ») :
+   frise et tableau sur tout l'écran ; « Ajuster à l'écran » réduit la frise pour
+   la voir en entier, « Taille réelle » la remet à l'échelle normale. */
+.outils-fiche{margin-left:auto;display:flex;gap:6px}
+.outils-fiche button{font:inherit;font-size:.82rem;padding:5px 10px;border:1px solid var(--trait);border-radius:4px;background:#fff;color:var(--nuit);cursor:pointer}
+.outils-fiche button:hover{border-color:var(--canard);color:var(--canard)}
+.outils-fiche .seul-plein{display:none}
+article.parcelle:fullscreen{background:#fff;overflow:auto;padding:18px 28px;margin:0}
+article.parcelle:fullscreen .entete{position:sticky;top:-18px;background:#fff;z-index:5;padding:10px 0;border-bottom:1px solid var(--trait)}
+article.parcelle:fullscreen .outils-fiche .seul-plein{display:inline-block}
+article.parcelle:fullscreen .outils-fiche .hors-plein{display:none}
+article.parcelle:fullscreen .tableau{overflow:visible}
 .frise svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
 .frise svg path{fill:none;stroke-width:3}
 .frise svg .vert{stroke:var(--vert)}.frise svg .jaune{stroke:var(--jaune-texte)}.frise svg .orange{stroke:var(--orange)}
@@ -268,7 +280,7 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
       <div id="paint-etat"></div>
       <div id="paint-cadre"><div id="paint-consigne"></div></div>
     </div>
-    <p class="aide">Cochez « remembrement » sur le maillon d'arrêt quand vous savez que la parcelle d'origine est issue d'un remembrement : il vaut alors origine trentenaire et la consigne d'état hypothécaire complémentaire disparaît.</p>
+    <!-- 05/10/2026 : case « remembrement » retirée (consultation directe : HISTO n'a pas cette information) -->
     <div id="liste-resultats"></div>
   </section>
 </main>
@@ -888,7 +900,7 @@ async function filiation(refBrute) {
   const trouve = maillons.length > 0;
   const existence = await controleExistence(racine);
   const plusAncien = trouve ? maillons.reduce((min, m) => (m.document.annee != null && (min == null || m.document.annee < min)) ? m.document.annee : min, null) : null;
-  return {
+  const resultat = {
     reference: { ...racine, libelle: libRef(racine) }, trouve,
     existence,
     message: trouve ? null : (idx === null
@@ -900,9 +912,11 @@ async function filiation(refBrute) {
       : existence.code === "disparue"
       ? "Parcelle disparue du plan actuel ; aucun mouvement antérieur ne l'a créée dans le DFI (parcelle d'origine, remembrement ou mouvement antérieur à l'informatisation). Recherches à poursuivre via l'état hypothécaire."
       : "Aucune filiation trouvée dans le DFI pour cette référence (remembrement, mouvement antérieur à l'informatisation, ou parcelle d'origine). Recherches à poursuivre via l'état hypothécaire."),
-    plus_ancien_mouvement: plusAncien, franchit_30_ans: plusAncien != null && (anneeCourante - plusAncien) > SEUIL_30_ANS,
+    plus_ancien_mouvement: plusAncien,
     alerte: trouve ? (alerteJaune ? "jaune" : "vert") : "jaune", maillons,
   };
+  resultat.franchit_30_ans = couverture(resultat).trentenaire;   // règle branche par branche
+  return resultat;
 }
 
 /* ---------- désignation des parcelles (05/10/2026) ----------
@@ -997,14 +1011,9 @@ async function designationDuLot() {
 /* ---------- état de la filiation au regard des trente ans (05/10/2026) ----------
    Même règle à l'écran (bandeau), dans le Word (pastilles, encadrés), dans le
    PDF et pour le mail d'instruction :
-   VERT  — la filiation franchit les trente ans, ou bute sur un remembrement
-           (case cochée sur le maillon d'arrêt : il vaut origine trentenaire) ;
+   VERT  — la filiation franchit les trente ans SUR TOUTES SES BRANCHES (voir couverture())
    JAUNE — elle s'arrête avant, ou n'est pas trouvée : état hypothécaire
            complémentaire à lever. */
-function remembrementCoche(res, num) {
-  const cb = document.querySelector(`.remembrement[data-ref="${cleRef(res.reference)}"][data-num="${num}"]`);
-  return !!(cb && cb.checked);
-}
 // les références introuvables (erreur de saisie probable) ne vont dans aucune sortie
 const resultatsUtiles = () => (etat.resultats?.resultats || []).filter(r => r.existence?.code !== "introuvable");
 const resultatsIntrouvables = () => (etat.resultats?.resultats || []).filter(r => r.existence?.code === "introuvable");
@@ -1013,14 +1022,54 @@ function noteDisparition(res) {
   const d = e.disparitions[e.disparitions.length - 1];
   return `Parcelle disparue du plan actuel : à l'origine de ${d.filles.join(", ")}${d.annee ? ` en ${d.annee}` : ""}.`;
 }
+/* COUVERTURE TRENTENAIRE BRANCHE PAR BRANCHE (05/10/2026)
+   Jusqu'ici, l'état se jugeait sur le mouvement le plus ancien de TOUTE la filiation :
+   une réunion de deux mères, l'une remontant à 1980, l'autre s'arrêtant en 2002,
+   passait pour trentenaire alors que la branche de 2002 n'est pas couverte.
+   Désormais : chaque « bout de branche » (parcelle d'origine dont le DFI ne connaît
+   pas la naissance) est daté par le document qui l'a fait disparaître ; la parcelle
+   n'est trentenaire que si TOUS ses bouts de branche ont disparu il y a plus de
+   trente ans. Les bouts plus récents sont les « arrêts » qui appellent l'état
+   hypothécaire complémentaire. */
+function couverture(res) {
+  const an = new Date().getFullYear(), nees = new Set(), disparue = new Map(), parcelles = new Map();
+  for (const m of res.maillons || []) {
+    nees.add(cleRef(m.parcelle));
+    for (const o of m.parcelles_origine) {
+      const k = cleRef(o); parcelles.set(k, o);
+      const a = m.document.annee;
+      // disparue dans plusieurs documents : on retient le plus récent (prudence)
+      if (!disparue.has(k) || (a != null && (disparue.get(k) == null || a > disparue.get(k)))) disparue.set(k, a ?? disparue.get(k) ?? null);
+    }
+  }
+  const bouts = [...parcelles.keys()].filter(k => !nees.has(k)).map(k => ({ parcelle: parcelles.get(k), annee: disparue.get(k) }));
+  const arrets = bouts.filter(b => b.annee == null || an - b.annee <= SEUIL_30_ANS)
+                      .sort((a, b) => (b.annee ?? 9999) - (a.annee ?? 9999));
+  return { bouts, arrets, disparue, trentenaire: res.trouve && arrets.length === 0 };
+}
+function phraseArret(et, travail) {
+  const a = et.arrets || [];
+  if (a.length <= 1) {
+    const an = a[0]?.annee ?? et.dernier?.document.annee;
+    return travail ? `La filiation s'arrête en ${an ?? "date inconnue"}${a[0] ? ` (${a[0].parcelle.libelle})` : ""}, en deçà des trente ans : un état hypothécaire complémentaire doit être levé.`
+                   : `La filiation ne peut être retracée au-delà de ${an ?? "cette date"} à partir des données cadastrales.`;
+  }
+  const liste = a.map(x => `${x.annee ?? "date inconnue"} pour ${x.parcelle.libelle}`).join(", ");
+  return travail ? `La filiation s'arrête en deçà des trente ans sur plusieurs branches — ${liste} : un état hypothécaire complémentaire doit être levé.`
+                 : `La filiation ne peut être retracée au-delà de ${liste}, à partir des données cadastrales.`;
+}
 function etatTrente(res) {
   if (res.existence?.code === "introuvable") return { couleur: "carmin", motif: "introuvable", texte: "Référence introuvable — ni au plan cadastral actuel ni dans le DFI : vérifiez la référence" };
   if (!res.trouve && res.existence?.code === "plan") return { couleur: "jaune", motif: "absente", texte: "Parcelle trouvée au plan actuel, aucun mouvement dans le DFI — état hypothécaire complémentaire à lever" };
   if (!res.trouve) return { couleur: "jaune", motif: "absente", texte: "Aucune filiation dans le DFI — état hypothécaire complémentaire à lever" };
   const dernier = res.maillons[res.maillons.length - 1];
-  if (remembrementCoche(res, dernier.num)) return { couleur: "vert", motif: "remembrement", dernier, texte: "Origine trentenaire atteinte (remembrement)" };
-  if (res.franchit_30_ans) return { couleur: "vert", motif: "trente", dernier, texte: "Origine trentenaire atteinte" };
-  return { couleur: "jaune", motif: "avant30", dernier, texte: `Filiation arrêtée en ${dernier.document.annee ?? "date inconnue"}, état hypothécaire complémentaire à lever` };
+  const cv = couverture(res);
+  if (cv.trentenaire) return { couleur: "vert", motif: "trente", dernier, texte: "Origine trentenaire atteinte sur toutes les branches" };
+  const libArret = a => `${a.parcelle.libelle} (${a.annee ?? "date inconnue"})`;
+  const une = cv.arrets.length === 1 && cv.bouts.length === 1;
+  return { couleur: "jaune", motif: "avant30", dernier, arrets: cv.arrets,
+    texte: une ? `Filiation arrêtée en ${cv.arrets[0].annee ?? "date inconnue"}, état hypothécaire complémentaire à lever`
+               : `Filiation arrêtée avant trente ans sur ${cv.arrets.map(libArret).join(", ")} — état hypothécaire complémentaire à lever` };
 }
 function majBandeau(res) {
   const k = cleRef(res.reference), e = etatTrente(res);
@@ -1030,11 +1079,6 @@ function majBandeau(res) {
   const pa = document.querySelector(`.pastille-tete[data-k="${k}"]`);
   if (pa) pa.className = `pastille pastille-tete ${e.couleur}`;
 }
-document.addEventListener("change", ev => {
-  if (!ev.target.classList.contains("remembrement") || !etat.resultats) return;
-  const res = etat.resultats.resultats.find(r => cleRef(r.reference) === ev.target.dataset.ref);
-  if (res) majBandeau(res);
-});
 
 /* ---------- affichage des résultats : du présent vers le passé ---------- */
 function surf(m2) { return m2 == null ? "" : `<span class="surf">${Number(m2).toLocaleString("fr-FR")} m²</span>`; }
@@ -1054,6 +1098,12 @@ function afficherResultats(j) {
         <h3>${ref.libelle}</h3>
         <span class="commune">${nomCommune(ref)}</span>
         ${res.plus_ancien_mouvement ? `<span class="compteur">plus ancien mouvement connu : ${res.plus_ancien_mouvement}</span>` : ""}
+        ${res.trouve ? `<span class="outils-fiche">
+          <button class="hors-plein" data-plein>⛶ Plein écran</button>
+          <button class="seul-plein" data-zoom="ajuster">Ajuster à l'écran</button>
+          <button class="seul-plein" data-zoom="1">Taille réelle</button>
+          <button class="seul-plein" data-sortir>Quitter (Échap)</button>
+        </span>` : ""}
       </div>`;
     html += `<div class="bandeau-trente" data-k="${cleRef(ref)}"></div>`;
     if (!res.trouve) {
@@ -1120,7 +1170,7 @@ function afficherResultats(j) {
 
     // ---- étage 2 : le tableau, une ligne par mouvement ----
     html += `<div class="tableau"><table class="mvts"><thead><tr>
-      <th>N°</th><th>Parcelle</th><th>Opération</th><th>Année</th><th>Nature du document</th><th>Identifiant</th><th>Lot</th><th>Préfixe</th><th>Parcelles d'origine</th><th>Parcelles sœurs</th><th>Remembrement</th>
+      <th>N°</th><th>Parcelle</th><th>Opération</th><th>Année</th><th>Nature du document</th><th>Identifiant</th><th>Lot</th><th>Préfixe</th><th>Parcelles d'origine</th><th>Parcelles sœurs</th>
     </tr></thead><tbody>`;
     let damierPose = false;
     for (const m of res.maillons) {
@@ -1138,7 +1188,7 @@ function afficherResultats(j) {
         <td>${m.parcelle.prefixe}</td>
         <td class="origines">${m.parcelles_origine.map(o => `<div>${o.libelle}${surf(o.contenance_m2)}</div>`).join("")}</td>
         <td class="soeurs">${m.parcelles_soeurs.map(s => `${s.libelle}${surf(s.contenance_m2)}`).join("<br>")}</td>
-        <td><input type="checkbox" class="remembrement" data-ref="${cleRef(res.reference)}" data-num="${m.num}" aria-label="remembrement"></td>
+        
       </tr>`;
       if (m.surfaces.signale) {
         html += `<tr class="jaune"><td></td><td colspan="10"><div class="alerte-jaune">Écart de surface : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (écart de ${m.surfaces.ecart_m2} m², ${m.surfaces.ecart_pct} %). À examiner.</div></td></tr>`;
@@ -1197,10 +1247,13 @@ function tracerFrises() {
   for (const f of friseATracer) {
     const frise = document.getElementById(f.id); if (!frise) continue;
     disposerBoites(frise, f.traits);
+    // z : réduction appliquée en plein écran (« Ajuster à l'écran ») ; les mesures du
+    // navigateur sont alors à l'échelle réduite, le dessin se fait à l'échelle réelle
+    const z = parseFloat(frise.style.zoom) || 1;
     const svg = frise.querySelector("svg"), cadre = frise.querySelector(".colonnes").getBoundingClientRect();
-    svg.setAttribute("width", cadre.width); svg.setAttribute("height", cadre.height);
+    svg.setAttribute("width", cadre.width / z); svg.setAttribute("height", cadre.height / z);
     const pos = k => { const b = frise.querySelector(`.boite[data-k="${k}"]`); if (!b) return null; const r = b.getBoundingClientRect();
-      return { g: r.left - cadre.left + frise.scrollLeft, d: r.right - cadre.left + frise.scrollLeft, y: r.top - cadre.top + r.height / 2 }; };
+      return { g: (r.left - cadre.left) / z, d: (r.right - cadre.left) / z, y: (r.top - cadre.top + r.height / 2) / z }; };
     // UN TRONC PAR DOCUMENT (05/10/2026). Les traits d'un même document d'arpentage
     // sont regroupés : les parcelles issues (à gauche) rejoignent une BARRE
     // VERTICALE posée dans l'intervalle, juste avant les parcelles d'origine (à
@@ -1238,6 +1291,27 @@ function tracerFrises() {
   }
 }
 window.addEventListener("resize", tracerFrises);
+// plein écran de la fiche, réduction de la frise
+document.addEventListener("click", ev => {
+  const b = ev.target.closest(".outils-fiche button"); if (!b) return;
+  const fiche = b.closest("article.parcelle"), frise = fiche.querySelector(".frise");
+  if (b.hasAttribute("data-plein")) { (fiche.requestFullscreen || fiche.webkitRequestFullscreen).call(fiche); return; }
+  if (b.hasAttribute("data-sortir")) { document.exitFullscreen?.(); return; }
+  if (!frise) return;
+  if (b.dataset.zoom === "1") frise.style.zoom = "";
+  else {                                            // ajuster : toute la largeur et la hauteur de l'écran
+    frise.style.zoom = "";
+    const larg = frise.querySelector(".colonnes").scrollWidth, haut = frise.querySelector(".colonnes").scrollHeight;
+    const dispoL = fiche.clientWidth - 56, dispoH = window.innerHeight - fiche.querySelector(".entete").offsetHeight - 120;
+    const f = Math.min(1, dispoL / larg, dispoH / haut);
+    frise.style.zoom = f < 1 ? String(Math.max(0.3, f)) : "";
+  }
+  tracerFrises();
+});
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) document.querySelectorAll(".frise").forEach(f => { f.style.zoom = ""; });
+  setTimeout(tracerFrises, 60);                     // la largeur a changé : on redessine les traits
+});
 
 /* ============================================================
    PLANS PAINT — un plan colorisé en tête de chaque section du Word
@@ -1410,7 +1484,7 @@ async function assurerPlans() {
    tableau complet (travail) ou allégé (client : année, nature, mère → fille) ;
    marqueur des trente ans conservé ; écart de surface retiré du client ;
    arrêt avant trente ans : travail = jaune + consigne EHF complémentaire,
-   client = phrase neutre ; case « remembrement » = origine trentenaire, vert ;
+   client = phrase neutre ; (case « remembrement » retirée le 05/10/2026) ;
    pied de page citant la DGFiP et la date de la situation chargée.
    ============================================================ */
 document.getElementById("btn-word-travail").addEventListener("click", () => genererWord("travail"));
@@ -1557,12 +1631,11 @@ async function genererWord(version) {
       }
       // arrêt de la filiation
       const et = etatTrente(res), dernier = et.dernier;
-      if (et.motif === "remembrement") {
-        corps.push(P(`Les parcelles d'origine ${dernier.parcelles_origine.map(o => o.libelle).join(", ")} sont issues d'un remembrement, qui vaut origine de propriété.`, { run: { color: VERT } }));
+      if (false) {
       } else if (et.motif === "avant30") {
         corps.push(travail
-          ? encadre(`La filiation s'arrête en ${dernier.document.annee ?? "date inconnue"}, en deçà des trente ans : un état hypothécaire complémentaire doit être levé.`, JAUNE)
-          : P(`La filiation ne peut être retracée au-delà de ${dernier.document.annee ?? "cette date"} à partir des données cadastrales.`));
+          ? encadre(phraseArret(et, true), JAUNE)
+          : P(phraseArret(et, false)));
       }
       // tableau des origines
       res.maillons.forEach((m, i) => { m.num = i + 1; });
@@ -1728,8 +1801,7 @@ async function genererPdfClient() {
         contenu.push({ text: phraseMaillon(m), margin: [0, 0, 0, 6] });
       }
       const et = etatTrente(res);
-      if (et.motif === "remembrement") contenu.push({ text: `Les parcelles d'origine ${et.dernier.parcelles_origine.map(o => o.libelle).join(", ")} sont issues d'un remembrement, qui vaut origine de propriété.`, margin: [0, 0, 0, 6] });
-      else if (et.motif === "avant30") contenu.push({ text: `La filiation ne peut être retracée au-delà de ${et.dernier.document.annee ?? "cette date"} à partir des données cadastrales.`, margin: [0, 0, 0, 6] });
+      if (et.motif === "avant30") contenu.push({ text: phraseArret(et, false), margin: [0, 0, 0, 6] });
       const corpsTab = [["Année", "Nature du document", "Filiation"].map(t => ({ text: t, bold: true, color: "#FFFFFF", fontSize: 9 }))];
       let marqueurTab = false;
       for (const m of res.maillons) {
@@ -1789,10 +1861,18 @@ const MAIL_EHF_DESTINATAIRE = "emma.bruneau@fidal.notaires.fr";
 const MAIL_EHF_CONFIRMATION = "jean-francois.dumetz@fidal.notaires.fr";   // destinataire du mail de retour
 document.getElementById("btn-mail-ehf").addEventListener("click", () => genererMailEhf());
 
-function ascendanceDirecte(res) {          // la parcelle puis ses mères, grands-mères… (jamais les sœurs)
+// La parcelle puis ses mères, grands-mères… — jamais les sœurs ni les tantes — SUR AU MOINS
+// TRENTE ANS (05/10/2026) : toute mère ayant existé au cours des trente dernières années
+// (disparue il y a trente ans ou moins, ou date inconnue) est listée, ce qui remonte, sur
+// chaque branche, jusqu'à la parcelle qui existait il y a trente ans. Les mères déjà
+// disparues avant cette date sont hors période et ne sont pas listées.
+function ascendanceDirecte(res) {
+  const an = new Date().getFullYear(), { disparue } = couverture(res);
   const out = [res.reference], vus = new Set([cleRef(res.reference)]);
   for (const m of (res.maillons || [])) for (const o of m.parcelles_origine) {
-    const k = cleRef(o); if (!vus.has(k)) { vus.add(k); out.push(o); }
+    const k = cleRef(o), a = disparue.get(k);
+    if (vus.has(k) || (a != null && an - a > SEUIL_30_ANS)) continue;
+    vus.add(k); out.push(o);
   }
   return out;
 }

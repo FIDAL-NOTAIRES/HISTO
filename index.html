@@ -1921,18 +1921,24 @@ const MAIL_EHF_DESTINATAIRE = "emma.bruneau@fidal.notaires.fr";
 const MAIL_EHF_CONFIRMATION = "jean-francois.dumetz@fidal.notaires.fr";   // destinataire du mail de retour
 document.getElementById("btn-mail-ehf").addEventListener("click", () => genererMailEhf());
 
-// La parcelle puis ses mères, grands-mères… — jamais les sœurs ni les tantes — SUR AU MOINS
-// TRENTE ANS (05/10/2026) : toute mère ayant existé au cours des trente dernières années
-// (disparue il y a trente ans ou moins, ou date inconnue) est listée, ce qui remonte, sur
-// chaque branche, jusqu'à la parcelle qui existait il y a trente ans. Les mères déjà
-// disparues avant cette date sont hors période et ne sont pas listées.
+// La parcelle puis ses mères, grands-mères… — jamais les sœurs ni les tantes — JUSQU'À
+// FRANCHIR TRENTE ANS (consigne JFD ; corrigé le 05/10/2026, « mères absentes ») : sur chaque
+// branche, on remonte de document en document tant que la parcelle créée existait encore au
+// cours des trente dernières années, ET l'on inclut les mères du PREMIER document antérieur
+// à trente ans — celui qui fait franchir le seuil et fait la jonction avec l'origine. La
+// version précédente s'arrêtait juste avant ce document et en omettait les mères.
 function ascendanceDirecte(res) {
-  const an = new Date().getFullYear(), { disparue } = couverture(res);
-  const out = [res.reference], vus = new Set([cleRef(res.reference)]);
-  for (const m of (res.maillons || [])) for (const o of m.parcelles_origine) {
-    const k = cleRef(o), a = disparue.get(k);
-    if (vus.has(k) || (a != null && an - a > SEUIL_30_ANS)) continue;
-    vus.add(k); out.push(o);
+  const an = new Date().getFullYear(), { disparue } = couverture(res), kRacine = cleRef(res.reference);
+  // une parcelle « existait dans la fenêtre » si c'est la parcelle recherchée, ou si elle a
+  // disparu il y a trente ans ou moins (date inconnue : retenue, par prudence)
+  const dansFenetre = k => k === kRacine || disparue.get(k) == null || an - disparue.get(k) <= SEUIL_30_ANS;
+  const out = [res.reference], vus = new Set([kRacine]);
+  for (const m of (res.maillons || [])) {
+    if (!dansFenetre(cleRef(m.parcelle))) continue;          // document créant une parcelle déjà hors période
+    for (const o of m.parcelles_origine) {
+      const k = cleRef(o); if (vus.has(k)) continue;
+      vus.add(k); out.push(o);
+    }
   }
   return out;
 }

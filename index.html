@@ -168,7 +168,8 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
 #paint-zone.actif{display:block}
 #paint-etape{font-size:.85rem;color:#5B6B7B;margin-top:4px;min-height:1.2em}
 #paint-releve{margin-top:10px}#paint-releve summary{cursor:pointer;color:var(--canard);font-weight:600}
-#paint-releve td.duree{text-align:right;white-space:nowrap}#paint-releve tr.lent td{background:#FFF3C4}
+#paint-releve td.duree{text-align:right;white-space:nowrap}
+#paint-releve tr.statut td{background:#EAF3F4;color:var(--nuit);font-size:.85rem}#paint-releve tr.lent td{background:#FFF3C4}
 #paint-etat{font-size:.92rem;color:var(--nuit)}
 #paint-cadre{display:none;margin-top:12px;border:3px solid var(--orange);border-radius:6px;overflow:hidden;background:#fff}
 #paint-cadre.visible{display:block}
@@ -1477,7 +1478,8 @@ function afficherRelevePaint() {
   d.style.display = "block";
   const sec = ms => ms >= 60000 ? `${Math.floor(ms / 60000)} min ${String(Math.round(ms % 60000 / 1000)).padStart(2, "0")} s` : `${(ms / 1000).toFixed(1)} s`;
   d.querySelector("tbody").innerHTML = relevePaint.map(e =>
-    `<tr class="${e.duree > 30000 ? "lent" : ""}"><td>${echapperHtml(e.vue)}</td><td>${echapperHtml(e.texte)}</td><td class="duree">${e.duree != null ? sec(e.duree) : "en cours"}</td></tr>`).join("")
+    e.statut ? `<tr class="statut"><td>${echapperHtml(e.vue)}</td><td colspan="2">${echapperHtml(e.texte)}</td></tr>`
+    : `<tr class="${e.duree > 30000 ? "lent" : ""}"><td>${echapperHtml(e.vue)}</td><td>${echapperHtml(e.texte)}</td><td class="duree">${e.duree != null ? sec(e.duree) : "en cours"}</td></tr>`).join("")
     + (() => { const tot = relevePaint.filter(e => e.duree != null).reduce((a, e) => a + e.duree, 0); return `<tr><td></td><td><b>Total</b></td><td class="duree"><b>${sec(tot)}</b></td></tr>`; })();
 }
 
@@ -1509,6 +1511,10 @@ function demanderPlan(qs, libelle) {
       if (e.origin !== PAINT_ORIGINE || e.source !== ifr.contentWindow) return;
       const d = e.data || {};
       if (d.type === "paint-etape") { nouvelleEtape(String(d.texte || "").slice(0, 160), Date.now()); return; }
+      if (d.type === "paint-statut") {          // message de la barre d'état de PAINT : la raison de ce qu'il fait
+        relevePaint.push({ vue: libelle, texte: "Message de PAINT : " + String(d.texte || ""), t: Date.now(), duree: 0, statut: true });
+        afficherRelevePaint(); return;
+      }
       if (d.type === "paint-pret") { nouvelleEtape("PAINT prêt, paramètres envoyés", Date.now()); ifr.contentWindow.postMessage({ type: "paint-params", qs }, PAINT_ORIGINE); }
       else if (d.type === "paint-image") terminer({ ok: true, png: d.png, largeur: d.largeur, hauteur: d.hauteur, manuel: d.manuel, reserve: d.reserve });
       else if (d.type === "paint-echec") terminer({ ok: false, message: d.message });

@@ -302,6 +302,26 @@ async function jeton() {
   if (!t) throw new Error("non connecté");
   return t;
 }
+/* ---------- mémoire locale du navigateur (05/10/2026, « le chargement de la commune est trop long ») ----------
+   Une petite base IndexedDB propre à HISTO garde : la liste complète des communes
+   (suggestions instantanées), les fichiers DFI de commune déjà lus (valables tant
+   que la situation trimestrielle ne change pas) et l'identifiant Drive de chaque
+   fichier (plus de recherche par nom). Données publiques uniquement. Si le
+   navigateur refuse la mémoire locale, tout fonctionne comme avant, sans elle. */
+const MemoireLocale = (() => {
+  let base = null;
+  const ouvrir = () => base || (base = new Promise((ok) => {
+    try {
+      const r = indexedDB.open("histo", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("cles");
+      r.onsuccess = () => ok(r.result); r.onerror = () => ok(null);
+    } catch { ok(null); }
+  }));
+  const tx = async (mode, f) => { const db = await ouvrir(); if (!db) return null;
+    return new Promise(ok => { try { const t = db.transaction("cles", mode), st = t.objectStore("cles"), r = f(st); t.oncomplete = () => ok(r?.result ?? null); t.onerror = () => ok(null); } catch { ok(null); } }); };
+  return { lire: k => tx("readonly", st => st.get(k)), ecrire: (k, v) => tx("readwrite", st => st.put(v, k)) };
+})();
+
 const cacheFichiers = new Map();
 /* Papier à en-tête (arbitrage JFD du 04/10/2026) : logo FIDAL NOTAIRES et Marianne
    sont lus sur le Drive au moment de la génération, avec le jeton déjà obtenu —
@@ -350,26 +370,58 @@ async function rognerMarges(octets) {
     return { octets, largeur: 0, hauteur: 0 };
   }
 }
-async function lireFichierDrive(nom) {            // retourne l'objet JSON, ou null si absent
-  if (cacheFichiers.has(nom)) return cacheFichiers.get(nom);
-  const t = await jeton();
+async function chercherIdDrive(nom, t) {
   let q = `name = '${nom}' and trashed = false`;
   if (DRIVE_DOSSIER_HISTO_ID) q += ` and '${DRIVE_DOSSIER_HISTO_ID}' in parents`;
   // corpora=allDrives : le dossier HISTO peut vivre dans un Drive partagé
   const liste = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=1&corpora=allDrives&supportsAllDrives=true&includeItemsFromAllDrives=true`,
     { headers: { Authorization: `Bearer ${t}` } }).then(r => r.json());
   if (liste.error) throw new Error(`Drive : ${liste.error.message || liste.error.status || "erreur"}`);
-  const f = liste.files?.[0];
-  if (!f) { cacheFichiers.set(nom, null); return null; }
-  const rep = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`,
-    { headers: { Authorization: `Bearer ${t}` } });
+  return liste.files?.[0]?.id || null;
+}
+async function telechargerDrive(nom, sit) {        // l'objet JSON, ou null si absent
+  const t = await jeton();
+  // Identifiant déjà connu POUR LA MÊME SITUATION : on saute la recherche par nom (la plus
+  // lente : elle balaie aussi les Drive partagés). Lié à la situation parce qu'un
+  // réimport trimestriel crée de nouveaux fichiers sur le Drive ; sans situation
+  // (fichier HISTO_situation.json lui-même), on cherche toujours.
+  const m = sit ? await MemoireLocale.lire("id:" + nom) : null;
+  let id = m && m.situation === sit ? m.id : null, memorise = !!id;
+  if (!id) id = await chercherIdDrive(nom, t);
+  if (!id) return null;
+  let rep = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!rep.ok && memorise) {                         // fichier remplacé depuis (réimport) : on le recherche à nouveau
+    id = await chercherIdDrive(nom, t); if (!id) return null;
+    rep = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${t}` } });
+  }
   if (!rep.ok) throw new Error(`Drive : lecture de ${nom} refusée (${rep.status})`);
-  const contenu = await rep.json();
-  cacheFichiers.set(nom, contenu);
+  if (sit) MemoireLocale.ecrire("id:" + nom, { id, situation: sit });
+  return rep.json();
+}
+// Promesse partagée : deux demandes simultanées du même fichier n'en font qu'un téléchargement.
+function lireFichierDrive(nom, sit = null) {
+  if (!cacheFichiers.has(nom)) {
+    const pr = telechargerDrive(nom, sit);
+    cacheFichiers.set(nom, pr);
+    pr.catch(() => cacheFichiers.delete(nom));     // une erreur (non connecté…) ne reste pas en cache
+  }
+  return cacheFichiers.get(nom);
+}
+// Fichier de commune : mémorisé dans le navigateur pour la situation trimestrielle en cours
+let situationPromesse = null;
+const situationCourante = () => situationPromesse || (situationPromesse = lireFichierDrive(`${PREFIXE_FICHIER}situation.json`).then(x => x?.situation || null).catch(() => null));
+async function lireFichierCommune(nom) {
+  const sit = await situationCourante();
+  if (sit) {
+    const m = await MemoireLocale.lire("dfi:" + nom);
+    if (m && m.situation === sit) return m.contenu;
+  }
+  const contenu = await lireFichierDrive(nom, sit);
+  if (sit) MemoireLocale.ecrire("dfi:" + nom, { situation: sit, contenu });
   return contenu;
 }
 lireFichierDrive(`${PREFIXE_FICHIER}situation.json`)
-  .then(sit => {
+  .then(sit => { situationPromesse = Promise.resolve(sit?.situation || null);
     document.getElementById("etatbase").textContent = sit
       ? `Données DGFiP : situation ${sit.situation}, ${Number(sit.communes).toLocaleString("fr-FR")} communes`
       : "Données : aucune situation chargée sur le Drive";
@@ -388,6 +440,37 @@ lireFichierDrive(`${PREFIXE_FICHIER}situation.json`)
      marque rouge dit qu'aucune commune ne l'est ;
    - la liste ne se ferme que si l'on clique hors du bloc du champ. */
 const sansAccent = t => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[-'’\s]+/g, " ").trim().toLowerCase();
+/* LISTE COMPLÈTE DES COMMUNES gardée dans le navigateur (05/10/2026) : chargée une fois
+   depuis le fichier des communes (≈ 35 000 lignes, rafraîchie tous les trente jours),
+   elle sert les propositions SUR PLACE, sans aller-retour réseau : la liste paraît
+   dès la deuxième lettre. Tant qu'elle n'est pas prête (toute première ouverture),
+   on interroge le service comme avant. */
+const COMMUNES_VALIDITE_JOURS = 30;
+let listeCommunes = null;
+const listeCommunesPrete = (async () => {
+  try {
+    const m = await MemoireLocale.lire("communes");
+    if (m && Date.now() - m.date < COMMUNES_VALIDITE_JOURS * 864e5 && m.liste?.length > 30000) { listeCommunes = m.liste; return; }
+    const [communes, deps] = await Promise.all([
+      fetch(`${GEO}?fields=nom,code,codeDepartement,codesPostaux,population`).then(r => r.json()),
+      fetch("https://geo.api.gouv.fr/departements?fields=nom,code").then(r => r.json()),
+    ]);
+    const nomDep = new Map(deps.map(d => [d.code, d.nom]));
+    const liste = communes.map(c => ({ code: c.code, nom: c.nom, codeDepartement: c.codeDepartement, departement: { nom: nomDep.get(c.codeDepartement) || "" },
+                                       codesPostaux: c.codesPostaux || [], population: c.population || 0, cle: sansAccent(c.nom) }));
+    if (liste.length > 30000) { listeCommunes = liste; MemoireLocale.ecrire("communes", { date: Date.now(), liste }); }
+  } catch { /* repli : interrogation du service à chaque frappe */ }
+})();
+function chercherCommunesSurPlace(q) {
+  const n = sansAccent(q); if (!n) return [];
+  const debut = [], mot = [];
+  for (const c of listeCommunes) {
+    if (c.cle.startsWith(n)) debut.push(c);
+    else if (c.cle.includes(" " + n)) mot.push(c);       // « marcq » trouve aussi « Saint-… Marcq »
+  }
+  const tri = (a, b) => b.population - a.population;
+  return debut.sort(tri).concat(mot.sort(tri)).slice(0, 8);
+}
 function brancherCommune(inputId, listeId, aideId, cle) {
   const input = document.getElementById(inputId), liste = document.getElementById(listeId), aide = document.getElementById(aideId);
   const bloc = input.closest(".suggest");
@@ -399,6 +482,7 @@ function brancherCommune(inputId, listeId, aideId, cle) {
     input.value = c.nom; fermer();
     marquer(`✓ ${c.nom} (${c.codeDepartement}) — INSEE ${c.code}`, "ok");
     majBoutons();
+    prechargerCommune(etat[cle]);          // le fichier DFI de la commune part tout de suite
   };
   const dessiner = () => {
     liste.innerHTML = proposees.map((c, i) => {
@@ -413,6 +497,12 @@ function brancherCommune(inputId, listeId, aideId, cle) {
     const q = input.value.trim();
     if (q.length < 2) { proposees = []; fermer(); return; }
     const n = ++numero;
+    if (listeCommunes) {                   // propositions sur place, immédiates
+      proposees = chercherCommunesSurPlace(q); surligne = proposees.length ? 0 : -1;
+      dessiner();
+      if (!proposees.length) marquer("Aucune commune trouvée", "ko");
+      return;
+    }
     minuterie = setTimeout(async () => {
       try {
         const r = await fetch(`${GEO}?nom=${encodeURIComponent(q)}&fields=code,nom,codeDepartement,departement,codesPostaux&boost=population&limit=8`);
@@ -599,8 +689,7 @@ document.getElementById("btn-lancer").addEventListener("click", async () => {
   const attente = document.getElementById("attente");
   attente.style.display = "block"; cacherErreur();
   try {
-    const resultats = [];
-    for (const r of refs) resultats.push(await filiation(r));
+    const resultats = await Promise.all(refs.map(r => filiation(r)));   // en parallèle ; l'ordre du lot est conservé
     const j = { genere_le: new Date().toISOString(), nb_references: resultats.length, resultats };
     etat.resultats = j;
     retenirCommuneDuLot();
@@ -665,11 +754,24 @@ async function contenanceActuelle(p) {
 
 // index d'une commune : clé de parcelle fille → [{doc, lot}]
 const indexCommunes = new Map();
-async function indexCommune(dep, com) {
+function indexCommune(dep, com) {
   const k = dep + com;
-  if (indexCommunes.has(k)) return indexCommunes.get(k);
-  const fichier = await lireFichierDrive(`${PREFIXE_FICHIER}${dep}${com}.json`);
-  if (!fichier) { indexCommunes.set(k, null); return null; }
+  if (!indexCommunes.has(k)) {
+    const pr = construireIndex(dep, com);
+    indexCommunes.set(k, pr);
+    pr.catch(() => indexCommunes.delete(k));
+  }
+  return indexCommunes.get(k);
+}
+// Préchargement : dès que la commune est choisie, son fichier part pendant qu'on tape les références
+function prechargerCommune(c) {
+  if (!c?.code) return;
+  const dc = depuisCode(c.code), r = normRef({ dep: dc.dep, com: dc.com, section: "A", numero: "1" });
+  indexCommune(r.dep, r.com).catch(() => {});
+}
+async function construireIndex(dep, com) {
+  const fichier = await lireFichierCommune(`${PREFIXE_FICHIER}${dep}${com}.json`);
+  if (!fichier) return null;
   const parFille = new Map();
   for (const doc of fichier.docs) for (const lot of doc.lots) {
     for (const c of lot.f) {
@@ -678,9 +780,7 @@ async function indexCommune(dep, com) {
       parFille.get(kk).push({ doc, lot });
     }
   }
-  const idx = { parFille, situation: fichier.situation };
-  indexCommunes.set(k, idx);
-  return idx;
+  return { parFille, situation: fichier.situation };
 }
 
 function ecartSurfaces(meres, filles) {
@@ -695,8 +795,9 @@ function ecartSurfaces(meres, filles) {
 async function filiation(refBrute) {
   const racine = normRef(refBrute);
   const anneeCourante = new Date().getFullYear();
-  racine.contenance_m2 = await contenanceActuelle(racine);      // décision du 02/10 midi : parcelle actuelle via l'API cadastre
-  const idx = await indexCommune(racine.dep, racine.com);
+  // décision du 02/10 midi : contenance de la parcelle actuelle via l'API cadastre — lancée en même temps que l'index
+  const [contenance, idx] = await Promise.all([contenanceActuelle(racine), indexCommune(racine.dep, racine.com)]);
+  racine.contenance_m2 = contenance;
   const maillons = [], vus = new Set();
   let alerteJaune = false;
   if (idx) {

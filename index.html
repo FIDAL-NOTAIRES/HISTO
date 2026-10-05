@@ -89,11 +89,18 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 .pastille{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin-right:6px}
 .pastille.vert{background:var(--vert)}.pastille.jaune{background:var(--jaune-texte)}.pastille.orange{background:var(--orange)}
 .rien{padding:12px 14px;background:#FFF9E0;border-left:4px solid var(--jaune-texte);border-radius:3px}
+.rien.carmin{background:#FBE9EE;border-left-color:var(--carmin)}
 /* bandeau d'état de la filiation (05/10/2026) : même code couleur que le Word */
 .bandeau-trente{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:4px;margin:0 0 14px;font-size:.95rem;color:var(--nuit)}
 .bandeau-trente.vert{background:#E6F3EC;border-left:5px solid var(--vert)}
 .bandeau-trente.jaune{background:#FFF3C4;border-left:5px solid var(--jaune-texte)}
 .bandeau-trente b{font-weight:600}
+.bandeau-trente.carmin{background:#FBE9EE;border-left:5px solid var(--carmin)}
+.pastille.carmin{background:var(--carmin)}
+.bandeau-trente small{display:block;font-weight:normal;color:#5B6B7B}
+/* contrôle d'existence à l'écran de validation (05/10/2026) */
+.controle{font-size:.88rem;white-space:nowrap}
+.controle.ok{color:#1F7A45}.controle.disparue{color:var(--canard)}.controle.ko{color:var(--carmin);font-weight:600}.controle.attente,.controle.inconnu{color:#5B6B7B}
 .enchainer{margin:0 0 16px}
 
 /* ===== ÉTAGE 1 : la FRISE CHRONOLOGIQUE — parcelle actuelle à gauche, le passé vers la droite ===== */
@@ -230,7 +237,7 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
     <h2>Références à traiter</h2>
     <p class="compteur" id="val-compteur"></p>
     <table class="refs">
-      <thead><tr><th></th><th>Commune</th><th>Préfixe</th><th>Section</th><th>Numéro</th><th>Origine</th></tr></thead>
+      <thead><tr><th></th><th>Commune</th><th>Préfixe</th><th>Section</th><th>Numéro</th><th>Origine</th><th>Contrôle</th></tr></thead>
       <tbody id="val-corps"></tbody>
     </table>
     <div class="actions">
@@ -666,7 +673,13 @@ function montrerValidation(refs) {
       <td><input type="checkbox" checked aria-label="retenir"></td>
       <td>${r.communeNom} (${r.dep})</td><td>${r.prefixe}</td><td>${r.section}</td>
       <td>${String(r.numero).replace(/^0+/, "")}</td><td>${r.origine}</td>
+      <td class="controle attente" data-c="${i}">vérification…</td>
     </tr>`).join("");
+  // contrôle d'existence ligne par ligne, sans bloquer : on peut décocher une référence introuvable
+  etat.refs.forEach((r, i) => controleExistence(r).then(c => {
+    const td = corps.querySelector(`td[data-c="${i}"]`); if (!td || etat.refs[i] !== r) return;
+    const l = libelleControle(c); td.className = `controle ${l.cls}`; td.textContent = l.txt;
+  }).catch(() => {}));
   corps.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
     const tr = cb.closest("tr"); etat.refs[+tr.dataset.i].retenue = cb.checked; tr.classList.toggle("ecartee", !cb.checked); majCompteur();
   }));
@@ -697,6 +710,43 @@ document.getElementById("btn-lancer").addEventListener("click", async () => {
   } catch (e) { montrerErreur("Impossible d'établir la filiation : " + e.message); }
   finally { attente.style.display = "none"; }
 });
+
+/* ---------- CONTRÔLE D'EXISTENCE D'UNE RÉFÉRENCE (05/10/2026) ----------
+   JFD : distinguer « parcelle trouvée, analysée, rien dans le DFI » de « parcelle
+   dont la référence n'existe même pas ». Croisement du plan cadastral actuel (IGN)
+   et du fichier DFI de la commune :
+   « plan »         — au plan actuel (avec ou sans mouvement dans le DFI) ;
+   « disparue »     — absente du plan actuel, mais parcelle d'origine dans le DFI ;
+   « introuvable »  — ni au plan actuel ni dans le DFI : erreur de saisie probable
+                       (carmin, écartée du mail et du tableau de désignation) ;
+   « dfi »          — absente du plan actuel, connue du DFI seulement comme fille ;
+   « inconnu »      — cadastre injoignable ou pas de données DFI : non tranché. */
+async function controleExistence(refBrute) {
+  const r = normRef(refBrute);
+  const [f, idx] = await Promise.all([featureParcelle(r), indexCommune(r.dep, r.com).catch(() => undefined)]);
+  const k = cleRef(r);
+  const commeFille = idx?.parFille.get(k) || [], commeMere = idx?.parMere.get(k) || [];
+  const disparitions = commeMere.map(({ doc, lot }) => ({
+    annee: doc.date ? +doc.date.slice(0, 4) : null,
+    filles: lot.f.map(c => libRef(cellule(c, r.dep, r.com, lot.pre))),
+  })).sort((a, b) => (a.annee ?? 0) - (b.annee ?? 0));
+  let code;
+  if (f) code = "plan";
+  else if (f === null && idx && commeMere.length) code = "disparue";
+  else if (f === null && idx && commeFille.length) code = "dfi";
+  else if (f === null && idx) code = "introuvable";
+  else code = "inconnu";
+  return { code, aMouvement: commeFille.length > 0, disparitions };
+}
+function libelleControle(c) {
+  if (!c) return { cls: "attente", txt: "vérification…" };
+  if (c.code === "plan") return { cls: "ok", txt: "✓ au plan actuel" };
+  if (c.code === "disparue") { const d = c.disparitions[c.disparitions.length - 1];
+    return { cls: "disparue", txt: `parcelle disparue${d?.annee ? ` en ${d.annee}` : ""}` }; }
+  if (c.code === "dfi") return { cls: "disparue", txt: "absente du plan actuel, connue du DFI" };
+  if (c.code === "introuvable") return { cls: "ko", txt: "✗ introuvable — vérifiez la référence" };
+  return { cls: "inconnu", txt: "existence non vérifiable" };
+}
 
 /* ---------- enchaînement (05/10/2026) : la commune reste en mémoire ----------
    Après une recherche, la commune du lot est posée dans l'onglet « Référence
@@ -743,7 +793,9 @@ const inseeDe = p => p.dep.length === 3 ? p.dep + p.com.slice(1) : p.dep + p.com
 const cacheParcellesIGN = new Map();
 function featureParcelle(p) {
   const u = `${CADASTRE_PT}?code_insee=${inseeDe(p)}&section=${encodeURIComponent(p.section.padStart(2, "0"))}&numero=${p.numero}&com_abs=${p.prefixe}`;
-  if (!cacheParcellesIGN.has(u)) cacheParcellesIGN.set(u, fetch(u).then(r => r.json()).then(j => j.features?.[0] || null).catch(() => null));
+  // rend la parcelle, null si le plan cadastral actuel ne la connaît pas, undefined si le service est injoignable
+  if (!cacheParcellesIGN.has(u)) cacheParcellesIGN.set(u, fetch(u).then(r => { if (!r.ok) throw 0; return r.json(); })
+    .then(j => j.features?.[0] || null).catch(() => { cacheParcellesIGN.delete(u); return undefined; }));
   return cacheParcellesIGN.get(u);
 }
 // contenance de la parcelle actuelle ; null si introuvable, sans blocage
@@ -772,15 +824,20 @@ function prechargerCommune(c) {
 async function construireIndex(dep, com) {
   const fichier = await lireFichierCommune(`${PREFIXE_FICHIER}${dep}${com}.json`);
   if (!fichier) return null;
-  const parFille = new Map();
+  const parFille = new Map(), parMere = new Map();
   for (const doc of fichier.docs) for (const lot of doc.lots) {
     for (const c of lot.f) {
       const r = cellule(c, dep, com, lot.pre), kk = cleRef(r);
       if (!parFille.has(kk)) parFille.set(kk, []);
       parFille.get(kk).push({ doc, lot });
     }
+    for (const c of lot.m) {
+      const r = cellule(c, dep, com, lot.pre), kk = cleRef(r);
+      if (!parMere.has(kk)) parMere.set(kk, []);
+      parMere.get(kk).push({ doc, lot });
+    }
   }
-  return { parFille, situation: fichier.situation };
+  return { parFille, parMere, situation: fichier.situation };
 }
 
 function ecartSurfaces(meres, filles) {
@@ -829,11 +886,19 @@ async function filiation(refBrute) {
   }
   maillons.sort((a, b) => { const da = a.document.date_effet ?? "", db = b.document.date_effet ?? ""; return da !== db ? (da < db ? 1 : -1) : a.profondeur - b.profondeur; });
   const trouve = maillons.length > 0;
+  const existence = await controleExistence(racine);
   const plusAncien = trouve ? maillons.reduce((min, m) => (m.document.annee != null && (min == null || m.document.annee < min)) ? m.document.annee : min, null) : null;
   return {
     reference: { ...racine, libelle: libRef(racine) }, trouve,
+    existence,
     message: trouve ? null : (idx === null
       ? "Aucune donnée DFI chargée pour cette commune sur le Drive."
+      : existence.code === "introuvable"
+      ? "Référence introuvable : cette parcelle ne figure ni au plan cadastral actuel ni dans les documents de filiation de la commune. Vérifiez la section, le numéro, le préfixe et la commune."
+      : existence.code === "plan"
+      ? "Parcelle trouvée au plan cadastral actuel ; aucun mouvement enregistré dans le DFI depuis l'informatisation du cadastre (parcelle d'origine, remembrement ou mouvement antérieur). Recherches à poursuivre via l'état hypothécaire."
+      : existence.code === "disparue"
+      ? "Parcelle disparue du plan actuel ; aucun mouvement antérieur ne l'a créée dans le DFI (parcelle d'origine, remembrement ou mouvement antérieur à l'informatisation). Recherches à poursuivre via l'état hypothécaire."
       : "Aucune filiation trouvée dans le DFI pour cette référence (remembrement, mouvement antérieur à l'informatisation, ou parcelle d'origine). Recherches à poursuivre via l'état hypothécaire."),
     plus_ancien_mouvement: plusAncien, franchit_30_ans: plusAncien != null && (anneeCourante - plusAncien) > SEUIL_30_ANS,
     alerte: trouve ? (alerteJaune ? "jaune" : "vert") : "jaune", maillons,
@@ -912,7 +977,7 @@ function codePostal(p) {
 // lignes de désignation du lot, regroupées commune → section, parcelles en ordre numérique
 async function designationDuLot() {
   const groupes = new Map();
-  for (const res of etat.resultats.resultats) {
+  for (const res of resultatsUtiles()) {
     const r = res.reference, k = `${r.dep}${r.com}|${r.section}`;
     if (!groupes.has(k)) groupes.set(k, []);
     groupes.get(k).push(res);
@@ -940,7 +1005,17 @@ function remembrementCoche(res, num) {
   const cb = document.querySelector(`.remembrement[data-ref="${cleRef(res.reference)}"][data-num="${num}"]`);
   return !!(cb && cb.checked);
 }
+// les références introuvables (erreur de saisie probable) ne vont dans aucune sortie
+const resultatsUtiles = () => (etat.resultats?.resultats || []).filter(r => r.existence?.code !== "introuvable");
+const resultatsIntrouvables = () => (etat.resultats?.resultats || []).filter(r => r.existence?.code === "introuvable");
+function noteDisparition(res) {
+  const e = res.existence; if (!e || e.code !== "disparue" || !e.disparitions.length) return "";
+  const d = e.disparitions[e.disparitions.length - 1];
+  return `Parcelle disparue du plan actuel : à l'origine de ${d.filles.join(", ")}${d.annee ? ` en ${d.annee}` : ""}.`;
+}
 function etatTrente(res) {
+  if (res.existence?.code === "introuvable") return { couleur: "carmin", motif: "introuvable", texte: "Référence introuvable — ni au plan cadastral actuel ni dans le DFI : vérifiez la référence" };
+  if (!res.trouve && res.existence?.code === "plan") return { couleur: "jaune", motif: "absente", texte: "Parcelle trouvée au plan actuel, aucun mouvement dans le DFI — état hypothécaire complémentaire à lever" };
   if (!res.trouve) return { couleur: "jaune", motif: "absente", texte: "Aucune filiation dans le DFI — état hypothécaire complémentaire à lever" };
   const dernier = res.maillons[res.maillons.length - 1];
   if (remembrementCoche(res, dernier.num)) return { couleur: "vert", motif: "remembrement", dernier, texte: "Origine trentenaire atteinte (remembrement)" };
@@ -950,7 +1025,8 @@ function etatTrente(res) {
 function majBandeau(res) {
   const k = cleRef(res.reference), e = etatTrente(res);
   const b = document.querySelector(`.bandeau-trente[data-k="${k}"]`);
-  if (b) { b.className = `bandeau-trente ${e.couleur}`; b.innerHTML = `<span class="pastille ${e.couleur}"></span><b>${e.texte}</b>`; }
+  const note = noteDisparition(res);
+  if (b) { b.className = `bandeau-trente ${e.couleur}`; b.innerHTML = `<span class="pastille ${e.couleur}"></span><span><b>${e.texte}</b>${note ? `<small>${note}</small>` : ""}</span>`; }
   const pa = document.querySelector(`.pastille-tete[data-k="${k}"]`);
   if (pa) pa.className = `pastille pastille-tete ${e.couleur}`;
 }
@@ -981,7 +1057,7 @@ function afficherResultats(j) {
       </div>`;
     html += `<div class="bandeau-trente" data-k="${cleRef(ref)}"></div>`;
     if (!res.trouve) {
-      html += `<p class="rien">${res.message}</p></article>`;
+      html += `<p class="rien${res.existence?.code === "introuvable" ? " carmin" : ""}">${res.message}</p></article>`;
       return html;
     }
     // numérotation incrémentale des mouvements, partagée par l'arbre et le tableau
@@ -1300,7 +1376,7 @@ async function assurerPlans() {
   if (!etat.resultats) return [];
   if (etat.plans) return etat.plans;
   const sections = new Map();   // clé commune+section → [refs]
-  for (const res of etat.resultats.resultats) {
+  for (const res of resultatsUtiles()) {
     const r = res.reference, k = `${r.dep}${r.com}|${r.section}`;
     if (!sections.has(k)) sections.set(k, []);
     sections.get(k).push(r);
@@ -1366,6 +1442,7 @@ async function genererWord(version) {
   if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
   if (!window.docx) return montrerErreur("La bibliothèque de génération Word n'est pas chargée (réseau ?).");
   const D = window.docx, travail = version === "travail";
+  if (!resultatsUtiles().length) return montrerErreur("Aucune référence du lot n'a été trouvée : vérifiez les références avant de générer le document.");
   let plans;
   try { plans = await assurerPlans(); }
   catch (e) { montrerErreur(e.message); return; }
@@ -1392,7 +1469,7 @@ async function genererWord(version) {
 
   // --- regroupement : commune → section → parcelles en ordre numérique (unités foncières : à venir, hors groupe pour l'instant)
   const groupes = new Map();
-  for (const res of etat.resultats.resultats) {
+  for (const res of resultatsUtiles()) {
     const r = res.reference, kc = `${r.dep}${r.com}`;
     if (!groupes.has(kc)) groupes.set(kc, { nom: nomCommune(r), dep: r.dep, sections: new Map() });
     const g = groupes.get(kc);
@@ -1436,6 +1513,10 @@ async function genererWord(version) {
     corps.push(new D.Table({ alignment: D.AlignmentType.CENTER, width: { size: LARG_DESIGN.reduce((a, b) => a + b, 0), type: D.WidthType.DXA }, columnWidths: LARG_DESIGN, borders: filetsTableau, rows: rows.map((cells, i) => new D.TableRow({ tableHeader: i === 0, children: cells })) }));
   });
   corps.push(P(""));
+  const introuvables = resultatsIntrouvables();
+  if (travail && introuvables.length) corps.push(new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { before: 120, after: 120 }, children: [
+    T(`Référence${introuvables.length > 1 ? "s" : ""} introuvable${introuvables.length > 1 ? "s" : ""} (ni au plan cadastral actuel ni dans le DFI), écartée${introuvables.length > 1 ? "s" : ""} de ce document : `, { color: "A01040", bold: true, size: 18 }),
+    T(introuvables.map(r => `${nomCommune(r.reference)} ${r.reference.libelle}`).join(", ") + ".", { color: "A01040", size: 18 }) ] }));
   corps.push(new D.Paragraph({ children: [T([dossier ? `Dossier ${dossier}` : "", client].filter(Boolean).join(" — "), { size: 24 })], alignment: D.AlignmentType.CENTER, spacing: { before: 400, after: 120 } }));
   corps.push(new D.Paragraph({ children: [T(`Établi le ${dateLongue(new Date().toISOString())}`)], alignment: D.AlignmentType.CENTER }));
   if (travail && collab) corps.push(new D.Paragraph({ children: [T(`Validé par ${collab}`, { italics: true })], alignment: D.AlignmentType.CENTER, spacing: { before: 120 } }));
@@ -1591,6 +1672,7 @@ const versDataUrl = octets => { let b = ""; for (let i = 0; i < octets.length; i
 async function genererPdfClient() {
   cacherErreur();
   if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
+  if (!resultatsUtiles().length) return montrerErreur("Aucune référence du lot n'a été trouvée : vérifiez les références avant de générer le document.");
   let pdfMake;
   try { pdfMake = await pdfmakePret(); } catch (e) { return montrerErreur("La bibliothèque PDF n'a pas pu être chargée (réseau ?)."); }
   let plans;
@@ -1617,7 +1699,7 @@ async function genererPdfClient() {
 
   // --- regroupement commune → section (même ordre que le Word)
   const groupes = new Map();
-  for (const res of etat.resultats.resultats) {
+  for (const res of resultatsUtiles()) {
     const r = res.reference, kc = `${r.dep}${r.com}`;
     if (!groupes.has(kc)) groupes.set(kc, { nom: nomCommune(r), sections: new Map() });
     const g = groupes.get(kc);

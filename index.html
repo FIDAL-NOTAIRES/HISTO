@@ -83,9 +83,12 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 .rien{padding:12px 14px;background:#FFF9E0;border-left:4px solid var(--jaune-texte);border-radius:3px}
 
 /* ===== ÉTAGE 1 : la FRISE CHRONOLOGIQUE — parcelle actuelle à gauche, le passé vers la droite ===== */
-.frise{position:relative;overflow-x:auto;padding:0 0 10px}
+.frise{position:relative;overflow-x:auto;padding:0 0 10px;width:100%}
 .frise .colonnes{display:flex;align-items:stretch;min-width:max-content}
-.frise .colonne{position:relative;display:flex;flex-direction:column;gap:14px;padding:50px 22px 16px;min-width:150px}
+/* 05/10/2026 (JFD) : la frise prend toute la largeur disponible et la dépasse au besoin
+   (défilement horizontal) ; colonnes élargies pour laisser respirer crochets et années */
+.frise .colonne{position:relative;display:flex;flex-direction:column;padding:56px 40px 20px;min-width:210px;flex:1 0 auto}
+.frise .boite{margin-top:18px}
 /* fonds de période : une teinte claire différente par époque, distincte des couleurs de fiabilité */
 .frise .colonne.p0{background:#EEF4F8}.frise .colonne.p1{background:#F3EFF7}.frise .colonne.p2{background:#EDF6F0}.frise .colonne.p3{background:#F8F1EA}
 .frise .colonne.ancien{box-shadow:inset 0 3px 0 0 var(--nuit)}
@@ -299,6 +302,35 @@ async function lireImageDrive(id) {                 // Uint8Array, ou null si il
   } catch (_) { /* repli silencieux */ }
   cacheImages.set(id, octets);
   return octets;
+}
+/* Rogne les marges blanches ou transparentes d'une image PNG (le logo du Drive
+   fait 441 × 235 px avec de larges marges : posé tel quel dans un cadre aux
+   proportions du logo utile, il paraissait écrasé — constat JFD du 05/10/2026).
+   Même geste que la lettre de mission : « recadré au plus près ». Rend
+   { octets, largeur, hauteur } ; en cas d'échec, l'image d'origine et ses dimensions. */
+async function rognerMarges(octets) {
+  try {
+    const bitmap = await createImageBitmap(new Blob([octets], { type: "image/png" }));
+    const cv = document.createElement("canvas"); cv.width = bitmap.width; cv.height = bitmap.height;
+    const g = cv.getContext("2d"); g.drawImage(bitmap, 0, 0);
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    let x0 = cv.width, y0 = cv.height, x1 = -1, y1 = -1;
+    for (let y = 0; y < cv.height; y++) for (let x = 0; x < cv.width; x++) {
+      const i = (y * cv.width + x) * 4;
+      const plein = d[i + 3] > 20 && (d[i] + d[i + 1] + d[i + 2]) < 740;   // ni transparent ni blanc
+      if (plein) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (x1 < 0) return { octets, largeur: bitmap.width, hauteur: bitmap.height };
+    const marge = 2;
+    x0 = Math.max(0, x0 - marge); y0 = Math.max(0, y0 - marge);
+    x1 = Math.min(cv.width - 1, x1 + marge); y1 = Math.min(cv.height - 1, y1 + marge);
+    const cv2 = document.createElement("canvas"); cv2.width = x1 - x0 + 1; cv2.height = y1 - y0 + 1;
+    cv2.getContext("2d").drawImage(cv, x0, y0, cv2.width, cv2.height, 0, 0, cv2.width, cv2.height);
+    const blob = await new Promise(r => cv2.toBlob(r, "image/png"));
+    return { octets: new Uint8Array(await blob.arrayBuffer()), largeur: cv2.width, hauteur: cv2.height };
+  } catch (_) {
+    return { octets, largeur: 0, hauteur: 0 };
+  }
 }
 async function lireFichierDrive(nom) {            // retourne l'objet JSON, ou null si absent
   if (cacheFichiers.has(nom)) return cacheFichiers.get(nom);
@@ -665,9 +697,28 @@ function afficherResultats(j) {
       poser(m.parcelle, noeuds.has(cleRef(m.parcelle)) ? noeuds.get(cleRef(m.parcelle)).cle : cleAn, m.couleur); // la fille prend la couleur la plus grave
       for (const o of m.parcelles_origine) {
         poser(o, cleAn, null);
-        traits.push({ de: cleRef(m.parcelle), vers: cleRef(o), couleur: m.couleur, ancien: m.document.au_dela_30_ans, annee: m.document.annee, num: m.num });
+        traits.push({ de: cleRef(m.parcelle), vers: cleRef(o), couleur: m.couleur, ancien: m.document.au_dela_30_ans, annee: m.document.annee, num: m.num,
+                      doc: `${m.document.id_dfi}|${m.document.lot ?? ""}|${cleAn}` });   // un document = un seul tronc à l'écran
       }
     }
+    // ORDRE DES BOÎTES (05/10/2026, « on se perd dans les lignes ») : colonne par
+    // colonne de gauche à droite, chaque parcelle prend pour rang la moyenne des
+    // rangs des parcelles qui en sont issues (déjà placées à sa gauche). Les filles
+    // d'une même mère se retrouvent ainsi groupées en face d'elle, et les troncs
+    // ne se croisent presque plus.
+    const rang = new Map();
+    colonnes.forEach((c, ci) => {
+      const liste = [...c.noeuds.values()];
+      if (ci === 0) { liste.forEach((n, i) => rang.set(cleRef(n.parcelle), i)); return; }
+      liste.forEach((n, i) => {
+        const k = cleRef(n.parcelle);
+        const liees = traits.filter(t => t.vers === k && rang.has(t.de)).map(t => rang.get(t.de));
+        n._rang = liees.length ? liees.reduce((a, b) => a + b, 0) / liees.length : 1e6 + i;
+      });
+      liste.sort((a, b) => a._rang - b._rang);
+      c.noeuds = new Map(liste.map(n => [cleRef(n.parcelle), n]));
+      liste.forEach((n, i) => rang.set(cleRef(n.parcelle), i));
+    });
     function boite(n) {
       const p = n.parcelle, actuelle = n.cle === "auj";
       return `<div class="boite ${actuelle ? "actuelle" : n.couleur}" data-k="${cleRef(p)}"><span class="ref"><small>${p.prefixe}</small>${p.section} ${String(p.numero).replace(/^0+/, "")}</span>${p.contenance_m2 != null ? `<span class="surf">${Number(p.contenance_m2).toLocaleString("fr-FR")} m²</span>` : ""}</div>`;
@@ -675,7 +726,7 @@ function afficherResultats(j) {
     const idFrise = `frise-${res.reference.dep}${res.reference.com}-${res.reference.section}${res.reference.numero}`.replace(/\W/g, "");
     html += `<div class="frise" id="${idFrise}"><div class="colonnes">${colonnes.filter(c => c.noeuds.size).map((c, i) =>
       `<div class="colonne p${i % 4}${c.ancien ? " ancien" : ""}"><div class="epoque">${c.titre}${c.ancien ? "<small>au-delà de trente ans</small>" : ""}</div>${[...c.noeuds.values()].map(boite).join("")}</div>`).join("")}</div><svg></svg></div>
-      <p class="legende-arbre">Trait : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:var(--orange)"></i>contradiction avec un acte <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 6px,#fff 6px 11px)"></i>au-delà de trente ans · l'année figure sur chaque trait</p>`;
+      <p class="legende-arbre">Trait : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:var(--orange)"></i>contradiction avec un acte <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 6px,#fff 6px 11px)"></i>au-delà de trente ans · un tronc par document, l'année sur le tronc</p>`;
     friseATracer.push({ id: idFrise, traits });
 
     // ---- étage 2 : le tableau, une ligne par mouvement ----
@@ -712,21 +763,86 @@ function afficherResultats(j) {
   document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+// PLACEMENT VERTICAL DES BOÎTES (05/10/2026, JFD : « ne pas hésiter à augmenter la
+// hauteur du cadre quand c'est nécessaire »). Les boîtes n'étaient qu'empilées en
+// haut de chaque colonne : la colonne la plus chargée fixait la hauteur et les
+// autres se tassaient en haut, tous les traits convergeant vers le même coin.
+// Désormais chaque boîte vise la hauteur moyenne des parcelles auxquelles elle est
+// reliée (filles à sa gauche à l'aller, mères à sa droite au retour), et quand
+// deux boîtes se gênent la seconde est repoussée vers le bas : la colonne, donc
+// le cadre, s'allonge d'autant. Trois passes alternées suffisent à stabiliser.
+const ECART_BOITES_PX = 18;
+function disposerBoites(frise, traits) {
+  const colonnes = [...frise.querySelectorAll(".colonne")];
+  const parCle = new Map();
+  colonnes.forEach((col, ci) => col.querySelectorAll(".boite").forEach(b => parCle.set(b.dataset.k, { b, ci, h: b.offsetHeight, y: 0 })));
+  const liens = traits.filter(t => parCle.has(t.de) && parCle.has(t.vers));
+  const centre = n => n.y + n.h / 2;
+  const placer = (col, cibleDe) => {
+    const boites = [...col.querySelectorAll(".boite")].map(b => parCle.get(b.dataset.k));
+    let bas = 0;
+    boites.forEach((n, i) => {
+      const c = cibleDe(n);
+      let y = c == null ? (i === 0 ? 0 : bas + ECART_BOITES_PX) : Math.round(c - n.h / 2);
+      y = Math.max(y, i === 0 ? 0 : bas + ECART_BOITES_PX);
+      n.y = y; bas = y + n.h;
+    });
+    boites.forEach((n, i) => { n.b.style.marginTop = (i === 0 ? n.y : n.y - (boites[i - 1].y + boites[i - 1].h)) + "px"; });
+  };
+  const moyenne = v => v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  // aller : chaque colonne se cale sur les filles déjà placées à sa gauche
+  colonnes.forEach((col, ci) => placer(col, ci === 0 ? () => null
+    : n => moyenne(liens.filter(t => parCle.get(t.vers) === n && parCle.get(t.de).ci < ci).map(t => centre(parCle.get(t.de))))));
+  // retour : chaque colonne se recale sur les mères à sa droite
+  for (let ci = colonnes.length - 2; ci >= 0; ci--)
+    placer(colonnes[ci], n => moyenne(liens.filter(t => parCle.get(t.de) === n && parCle.get(t.vers).ci > ci).map(t => centre(parCle.get(t.vers)))));
+  // dernier aller : les mères se recentrent sur leurs filles recalées
+  colonnes.forEach((col, ci) => { if (ci > 0) placer(col,
+    n => moyenne(liens.filter(t => parCle.get(t.vers) === n && parCle.get(t.de).ci < ci).map(t => centre(parCle.get(t.de))))); });
+}
+
 // Les traits de filiation : dessinés en SVG une fois les boîtes en place (et redessinés au redimensionnement)
 const friseATracer = [];
 function tracerFrises() {
   for (const f of friseATracer) {
     const frise = document.getElementById(f.id); if (!frise) continue;
+    disposerBoites(frise, f.traits);
     const svg = frise.querySelector("svg"), cadre = frise.querySelector(".colonnes").getBoundingClientRect();
     svg.setAttribute("width", cadre.width); svg.setAttribute("height", cadre.height);
     const pos = k => { const b = frise.querySelector(`.boite[data-k="${k}"]`); if (!b) return null; const r = b.getBoundingClientRect();
       return { g: r.left - cadre.left + frise.scrollLeft, d: r.right - cadre.left + frise.scrollLeft, y: r.top - cadre.top + r.height / 2 }; };
-    let d = "";
+    // UN TRONC PAR DOCUMENT (05/10/2026). Les traits d'un même document d'arpentage
+    // sont regroupés : les parcelles issues (à gauche) rejoignent une BARRE
+    // VERTICALE posée dans l'intervalle, juste avant les parcelles d'origine (à
+    // droite), qui en repartent par une branche courte. L'année est écrite une
+    // seule fois, au-dessus de la barre. Une division en cinq ne fait plus cinq
+    // courbes en éventail et cinq fois l'année, mais un crochet lisible.
+    const gravite = { vert: 0, jaune: 1, orange: 2 };
+    const groupes = new Map();
     for (const t of f.traits) {
-      const a = pos(t.de), b = pos(t.vers); if (!a || !b) continue;
-      const x1 = a.d, y1 = a.y, x2 = b.g, y2 = b.y, cx = (x1 + x2) / 2;
-      d += `<path class="${t.couleur}${t.ancien ? " ancien" : ""}" d="M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}"/>`;
-      d += `<text x="${cx}" y="${(y1 + y2) / 2 - 6}" text-anchor="middle">${t.annee ?? "?"}</text>`;
+      const g = groupes.get(t.doc) || { filles: new Map(), meres: new Map(), couleur: "vert", ancien: false, annee: t.annee };
+      g.filles.set(t.de, true); g.meres.set(t.vers, true);
+      if (gravite[t.couleur] > gravite[g.couleur]) g.couleur = t.couleur;
+      g.ancien = g.ancien || t.ancien;
+      groupes.set(t.doc, g);
+    }
+    let d = "";
+    for (const g of groupes.values()) {
+      const filles = [...g.filles.keys()].map(pos).filter(Boolean), meres = [...g.meres.keys()].map(pos).filter(Boolean);
+      if (!filles.length || !meres.length) continue;
+      const xBarre = Math.min(...meres.map(m => m.g)) - 30;                 // dans l'intervalle élargi, côté origine
+      const ys = [...filles.map(q => q.y), ...meres.map(q => q.y)];
+      const yHaut = Math.min(...ys), yBas = Math.max(...ys);
+      const cls = `${g.couleur}${g.ancien ? " ancien" : ""}`;
+      for (const q of filles) {                                               // branche fille → barre (courbe douce)
+        const cx = (q.d + xBarre) / 2;
+        d += `<path class="${cls}" d="M${q.d},${q.y} C${cx},${q.y} ${cx},${q.y} ${xBarre},${q.y}"/>`;
+      }
+      if (yBas - yHaut > 1) d += `<path class="${cls}" d="M${xBarre},${yHaut} L${xBarre},${yBas}"/>`;   // la barre
+      for (const q of meres) d += `<path class="${cls}" d="M${xBarre},${q.y} L${q.g},${q.y}"/>`;        // branche barre → origine
+      const yTexte = yHaut - 7;
+      d += `<rect x="${xBarre - 18}" y="${yTexte - 12}" width="36" height="16" rx="3" fill="#fff" opacity="0.92"/>`;
+      d += `<text x="${xBarre}" y="${yTexte}" text-anchor="middle">${g.annee ?? "?"}</text>`;
     }
     svg.innerHTML = d;
   }
@@ -1061,11 +1177,20 @@ async function genererWord(version) {
 
   // --- papier à en-tête du cabinet (modèle courrier FIDAL, charte v2.2)
   const GRIS = "657D96";
-  const [logoFidal, marianne] = await Promise.all([lireImageDrive(DRIVE_LOGO_FIDAL_ID), lireImageDrive(DRIVE_MARIANNE_ID)]);
+  const [logoBrut, marianne] = await Promise.all([lireImageDrive(DRIVE_LOGO_FIDAL_ID), lireImageDrive(DRIVE_MARIANNE_ID)]);
+  // logo : rogné au plus près puis posé à 137 pt de large comme sur la lettre de mission,
+  // la hauteur suivant les proportions réelles de l'image (jamais imposée)
+  const LARGEUR_LOGO_PT = 137;
+  let logoFidal = null, hauteurLogo = 53;
+  if (logoBrut) {
+    const r = await rognerMarges(logoBrut);
+    logoFidal = r.octets;
+    if (r.largeur > 0) hauteurLogo = Math.round(LARGEUR_LOGO_PT * r.hauteur / r.largeur);
+  }
   const filet = { bottom: { style: D.BorderStyle.SINGLE, size: 6, color: NUIT, space: 6 } };
   const entete = new D.Header({ children: [new D.Paragraph({
     children: logoFidal
-      ? [new D.ImageRun({ data: logoFidal, transformation: { width: 110, height: 42 } })]
+      ? [new D.ImageRun({ data: logoFidal, transformation: { width: LARGEUR_LOGO_PT, height: hauteurLogo } })]
       : [new D.TextRun({ text: "FIDAL", font: "Georgia", size: 32, bold: true, color: NUIT }), new D.TextRun({ text: "  NOTAIRES", font: "Segoe UI", size: 22, color: NUIT })],
     alignment: D.AlignmentType.CENTER, border: filet, spacing: { after: 120 } })] });
   const ligne = (children, o = {}) => new D.Paragraph({ children, alignment: o.alignment ?? D.AlignmentType.CENTER, spacing: { after: 20 } });
@@ -1079,17 +1204,17 @@ async function genererWord(version) {
   const sansBordure = { style: D.BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const bordsNuls = { top: sansBordure, bottom: sansBordure, left: sansBordure, right: sansBordure, insideHorizontal: sansBordure, insideVertical: sansBordure };
   const pied = new D.Footer({ children: [new D.Table({
-    width: { size: 9638, type: D.WidthType.DXA }, columnWidths: marianne ? [1300, 8338] : [9638], borders: bordsNuls,
+    width: { size: 9638, type: D.WidthType.DXA }, columnWidths: marianne ? [1700, 7938] : [9638], borders: bordsNuls,
     rows: [new D.TableRow({ children: [
-      ...(marianne ? [new D.TableCell({ width: { size: 1300, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: [new D.Paragraph({ children: [new D.ImageRun({ data: marianne, transformation: { width: 55, height: 48 } })], alignment: D.AlignmentType.CENTER })] })] : []),
-      new D.TableCell({ width: { size: marianne ? 8338 : 9638, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: colonneTexte }),
+      ...(marianne ? [new D.TableCell({ width: { size: 1700, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: [new D.Paragraph({ children: [new D.ImageRun({ data: marianne, transformation: { width: 74, height: 64 } })], alignment: D.AlignmentType.CENTER })] })] : []),
+      new D.TableCell({ width: { size: marianne ? 7938 : 9638, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: colonneTexte }),
     ] })],
   })] });
 
   const doc = new D.Document({
     creator: "FIDAL Notaires — HISTO", title: "Origine cadastrale",
     styles: { default: { document: { run: { font: "Segoe UI", size: 20, color: NUIT } } } },
-    sections: [{ properties: { page: { margin: { top: 1134, bottom: 1300, left: 1134, right: 1134, header: 500, footer: 400 } } }, headers: { default: entete }, footers: { default: pied }, children: corps }],
+    sections: [{ properties: { page: { margin: { top: 1300, bottom: 1500, left: 1134, right: 1134, header: 450, footer: 350 } } }, headers: { default: entete }, footers: { default: pied }, children: corps }],
   });
   const blob = await D.Packer.toBlob(doc);
   const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();

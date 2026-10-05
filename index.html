@@ -166,6 +166,9 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
 /* ---- plans PAINT : progression et cadre de reprise manuelle ---- */
 #paint-zone{display:none;margin:12px 0 18px;background:var(--papier);border:1px solid var(--trait);border-radius:6px;padding:14px 18px}
 #paint-zone.actif{display:block}
+#paint-etape{font-size:.85rem;color:#5B6B7B;margin-top:4px;min-height:1.2em}
+#paint-releve{margin-top:10px}#paint-releve summary{cursor:pointer;color:var(--canard);font-weight:600}
+#paint-releve td.duree{text-align:right;white-space:nowrap}#paint-releve tr.lent td{background:#FFF3C4}
 #paint-etat{font-size:.92rem;color:var(--nuit)}
 #paint-cadre{display:none;margin-top:12px;border:3px solid var(--orange);border-radius:6px;overflow:hidden;background:#fff}
 #paint-cadre.visible{display:block}
@@ -278,6 +281,8 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
     </div>
     <div id="paint-zone">
       <div id="paint-etat"></div>
+      <div id="paint-etape"></div>
+      <details id="paint-releve" style="display:none"><summary>Relevé des temps PAINT</summary><div class="tableau"><table class="mvts"><thead><tr><th>Vue</th><th>Étape</th><th>Durée</th></tr></thead><tbody></tbody></table></div><p class="aide">Copiez ce tableau (ou faites-en une capture) pour diagnostiquer une lenteur.</p></details>
       <div id="paint-cadre"><div id="paint-consigne"></div></div>
     </div>
     <!-- 05/10/2026 : case « remembrement » retirée (consultation directe : HISTO n'a pas cette information) -->
@@ -823,7 +828,10 @@ const cacheParcellesIGN = new Map();
 function featureParcelle(p) {
   const u = `${CADASTRE_PT}?code_insee=${inseeDe(p)}&section=${encodeURIComponent(p.section.padStart(2, "0"))}&numero=${p.numero}&com_abs=${p.prefixe}`;
   // rend la parcelle, null si le plan cadastral actuel ne la connaît pas, undefined si le service est injoignable
-  if (!cacheParcellesIGN.has(u)) cacheParcellesIGN.set(u, fetch(u).then(r => { if (!r.ok) throw 0; return r.json(); })
+  // erreur du service (constatée le 05/10/2026 : réponse 500) → une nouvelle tentative après 1,5 s
+  const lire = () => fetch(u).then(r => { if (!r.ok) throw 0; return r.json(); });
+  if (!cacheParcellesIGN.has(u)) cacheParcellesIGN.set(u, lire()
+    .catch(() => new Promise(ok => setTimeout(ok, 1500)).then(lire))
     .then(j => j.features?.[0] || null).catch(() => { cacheParcellesIGN.delete(u); return undefined; }));
   return cacheParcellesIGN.get(u);
 }
@@ -1438,8 +1446,30 @@ function parametresPaint(vue, communeNom) {
 const zonePaint = () => document.getElementById("paint-zone");
 function etatPaint(txt) { zonePaint().classList.add("actif"); document.getElementById("paint-etat").textContent = txt; }
 
+/* RELEVÉ DES TEMPS PAINT (05/10/2026) : le pont transmet chaque étape de PAINT (message du
+   cercle d'attente) ; on affiche l'étape en cours et son temps, puis le relevé complet,
+   étape par étape et vue par vue, sous la zone PAINT. Étape de plus de 30 s surlignée. */
+const relevePaint = [];
+function afficherRelevePaint() {
+  const d = document.getElementById("paint-releve"); if (!relevePaint.length) { d.style.display = "none"; return; }
+  d.style.display = "block";
+  const sec = ms => ms >= 60000 ? `${Math.floor(ms / 60000)} min ${String(Math.round(ms % 60000 / 1000)).padStart(2, "0")} s` : `${(ms / 1000).toFixed(1)} s`;
+  d.querySelector("tbody").innerHTML = relevePaint.map(e =>
+    `<tr class="${e.duree > 30000 ? "lent" : ""}"><td>${echapperHtml(e.vue)}</td><td>${echapperHtml(e.texte)}</td><td class="duree">${e.duree != null ? sec(e.duree) : "en cours"}</td></tr>`).join("")
+    + (() => { const tot = relevePaint.filter(e => e.duree != null).reduce((a, e) => a + e.duree, 0); return `<tr><td></td><td><b>Total</b></td><td class="duree"><b>${sec(tot)}</b></td></tr>`; })();
+}
+
 function demanderPlan(qs, libelle) {
   return new Promise(resolve => {
+    const debutVue = Date.now();
+    let etapeCourante = null;
+    const cloreEtape = (t) => { if (etapeCourante && etapeCourante.duree == null) etapeCourante.duree = t - etapeCourante.t; };
+    const nouvelleEtape = (texte, t) => { cloreEtape(t); etapeCourante = { vue: libelle, texte, t, duree: null }; relevePaint.push(etapeCourante); afficherRelevePaint(); };
+    nouvelleEtape("chargement de PAINT dans le cadre", debutVue);
+    const tic = setInterval(() => {
+      const el = document.getElementById("paint-etape");
+      if (etapeCourante) el.textContent = `Étape en cours : ${etapeCourante.texte} — ${Math.round((Date.now() - etapeCourante.t) / 1000)} s (vue commencée il y a ${Math.round((Date.now() - debutVue) / 1000)} s)`;
+    }, 1000);
     const cadre = document.getElementById("paint-cadre"), consigne = document.getElementById("paint-consigne");
     const ifr = document.createElement("iframe");
     ifr.src = `${PAINT_URL}?charge=histo&cb=${Date.now()}`;
@@ -1449,12 +1479,15 @@ function demanderPlan(qs, libelle) {
     const terminer = (res) => {
       if (fini) return; fini = true;
       window.removeEventListener("message", ecoute); clearTimeout(garde);
+      clearInterval(tic); cloreEtape(Date.now()); nouvelleEtape(res.ok ? "plan reçu" : `échec : ${res.message}`, Date.now()); etapeCourante.duree = 0;
+      document.getElementById("paint-etape").textContent = ""; afficherRelevePaint();
       cadre.classList.remove("visible"); ifr.remove(); resolve(res);
     };
     const ecoute = (e) => {
       if (e.origin !== PAINT_ORIGINE || e.source !== ifr.contentWindow) return;
       const d = e.data || {};
-      if (d.type === "paint-pret") ifr.contentWindow.postMessage({ type: "paint-params", qs }, PAINT_ORIGINE);
+      if (d.type === "paint-etape") { nouvelleEtape(String(d.texte || "").slice(0, 160), Date.now()); return; }
+      if (d.type === "paint-pret") { nouvelleEtape("PAINT prêt, paramètres envoyés", Date.now()); ifr.contentWindow.postMessage({ type: "paint-params", qs }, PAINT_ORIGINE); }
       else if (d.type === "paint-image") terminer({ ok: true, png: d.png, largeur: d.largeur, hauteur: d.hauteur, manuel: d.manuel, reserve: d.reserve });
       else if (d.type === "paint-echec") terminer({ ok: false, message: d.message });
       else if (d.type === "paint-attente-manuelle") {
@@ -1480,12 +1513,15 @@ async function assurerPlans() {
     sections.get(k).push(r);
   }
   const plans = [];   // {cle, section, communeNom, vues:[{png,...}]}
+  relevePaint.length = 0; afficherRelevePaint();
   let i = 0;
   for (const [cle, refs] of sections) {
     i++;
     const communeNom = nomCommune(refs[0]);
     etatPaint(`Plan PAINT ${i} sur ${sections.size} — section ${refs[0].section} de ${communeNom} : contours cadastraux…`);
+    const t0 = Date.now();
     const contours = await contoursSection(refs);
+    relevePaint.push({ vue: `section ${refs[0].section} de ${communeNom}`, texte: `contours cadastraux (${refs.length} parcelle(s), dans HISTO)`, t: t0, duree: Date.now() - t0 }); afficherRelevePaint();
     const vues = grouperEnVues(contours);
     const images = [];
     for (let v = 0; v < vues.length; v++) {

@@ -1903,8 +1903,9 @@ async function genererPdfClient() {
    ------------------------------------------------------------
    Destinataire par défaut : Emma Bruneau. Objet : « Demande d'état
    hypothécaire — Dossier » + la référence saisie dans HISTO.
-   Tableau : les parcelles en JAUNE (origine non assurée dans les trente ans)
-   et leur SEULE LIGNE D'ASCENDANCE DIRECTE — mères, grands-mères… — SANS les
+   Tableau : TOUTES les parcelles du lot (hors références introuvables — confirmé par
+   JFD le 05/10/2026, le filtre « jaune seulement » était une erreur) et leur SEULE
+   LIGNE D'ASCENDANCE DIRECTE jusqu'à franchir trente ans — mères, grands-mères… — SANS les
    parcelles sœurs ni les « tantes » ; colonnes commune, code postal, préfixe,
    section, numéro (on s'arrête à la parcelle : ni lot de volume, ni lot de
    copropriété, ni lieu-dit, ni contenance, ni référence de document).
@@ -1951,8 +1952,12 @@ async function genererMailEhf() {
   if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
   const dossier = document.getElementById("dossier").value.trim();
   if (!dossier) { document.getElementById("dossier").focus(); return montrerErreur("Renseignez la référence du dossier : elle figure dans l'objet de la demande et de la confirmation."); }
-  const concernees = etat.resultats.resultats.filter(res => etatTrente(res).couleur === "jaune");
-  if (!concernees.length) return montrerErreur("Aucune parcelle du lot n'appelle d'état hypothécaire complémentaire : toutes atteignent l'origine trentenaire.");
+  // TOUTES les parcelles du lot (confirmé par JFD le 05/10/2026) : l'état hypothécaire se lève
+  // sur tout le bien et ses anciennes références depuis trente ans, que la filiation
+  // cadastrale soit complète (vert) ou non (jaune). Seules les références introuvables,
+  // erreurs de saisie probables, sont écartées.
+  const concernees = resultatsUtiles();
+  if (!concernees.length) return montrerErreur("Aucune référence du lot n'a été trouvée : vérifiez les références avant de préparer la demande.");
   const lignes = [], vues = new Set();
   for (const res of concernees) for (const p of ascendanceDirecte(res)) {
     const k = cleRef(p); if (vues.has(k)) continue; vues.add(k);

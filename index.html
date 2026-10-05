@@ -52,6 +52,14 @@ textarea{min-height:80px;resize:vertical}
 .suggest ul li:hover,.suggest ul li[aria-selected="true"]{background:var(--gris)}
 .suggest ul li span{color:#5B6B7B;font-size:.85rem;margin-left:8px}
 .aide{font-size:.85rem;color:#5B6B7B;margin-top:6px}
+/* autocomplétion de commune (05/10/2026) : reprise du composant de PAINT —
+   département et code postal dans la liste, marque « ✓ … — INSEE » sous le champ */
+.suggest ul{box-shadow:0 12px 26px rgba(9,21,37,.18);border-radius:0 0 6px 6px}
+.suggest ul li{display:flex;justify-content:space-between;gap:10px;border-top:1px solid var(--trait)}
+.suggest ul li:first-child{border-top:0}
+.suggest ul li:hover,.suggest ul li.survol{background:#EAFAFB;box-shadow:inset 3px 0 0 var(--canard)}
+.suggest ul li span{white-space:nowrap}
+.aide.ok{color:#1F7A45;font-weight:600}.aide.ko{color:var(--carmin)}
 
 .depot{border:2px dashed var(--canard);border-radius:6px;padding:34px;text-align:center;color:var(--nuit);background:#F7FBFB}
 .depot.survol{background:#E7F5F6}
@@ -81,6 +89,12 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 .pastille{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin-right:6px}
 .pastille.vert{background:var(--vert)}.pastille.jaune{background:var(--jaune-texte)}.pastille.orange{background:var(--orange)}
 .rien{padding:12px 14px;background:#FFF9E0;border-left:4px solid var(--jaune-texte);border-radius:3px}
+/* bandeau d'état de la filiation (05/10/2026) : même code couleur que le Word */
+.bandeau-trente{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:4px;margin:0 0 14px;font-size:.95rem;color:var(--nuit)}
+.bandeau-trente.vert{background:#E6F3EC;border-left:5px solid var(--vert)}
+.bandeau-trente.jaune{background:#FFF3C4;border-left:5px solid var(--jaune-texte)}
+.bandeau-trente b{font-weight:600}
+.enchainer{margin:0 0 16px}
 
 /* ===== ÉTAGE 1 : la FRISE CHRONOLOGIQUE — parcelle actuelle à gauche, le passé vers la droite ===== */
 .frise{position:relative;overflow-x:auto;padding:0 0 10px;width:100%}
@@ -153,13 +167,14 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
 <main>
   <!-- ======== Trois onglets ======== -->
   <div class="onglets" role="tablist">
-    <button role="tab" aria-selected="true"  data-onglet="adresse">Adresse</button>
-    <button role="tab" aria-selected="false" data-onglet="reference">Référence cadastrale</button>
+    <!-- 05/10/2026 (JFD) : la recherche historique part d'abord de la parcelle → onglet par défaut -->
+    <button role="tab" aria-selected="true"  data-onglet="reference">Référence cadastrale</button>
+    <button role="tab" aria-selected="false" data-onglet="adresse">Adresse</button>
     <button role="tab" aria-selected="false" data-onglet="depot">Dépôt d'un PDF ou d'un Excel</button>
   </div>
 
   <!-- Onglet 1 : adresse -->
-  <section class="panneau actif" id="panneau-adresse" role="tabpanel">
+  <section class="panneau" id="panneau-adresse" role="tabpanel">
     <div class="ligne">
       <div class="suggest">
         <label for="adresse">Adresse du bien</label>
@@ -174,7 +189,7 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
   </section>
 
   <!-- Onglet 2 : référence cadastrale -->
-  <section class="panneau" id="panneau-reference" role="tabpanel">
+  <section class="panneau actif" id="panneau-reference" role="tabpanel">
     <div class="ligne deux">
       <div class="suggest">
         <label for="commune">Commune</label>
@@ -230,6 +245,7 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
   <!-- ======== Résultats ======== -->
   <section id="resultats">
     <h2>Filiation</h2>
+    <div class="enchainer"><button class="bouton secondaire" id="btn-enchainer">Autre parcelle dans la même commune</button></div>
     <div class="ligne trois" style="margin-bottom:10px">
       <div><label for="dossier">Référence du dossier</label><input type="text" id="dossier" placeholder="2026-0412"></div>
       <div><label for="client">Client</label><input type="text" id="client" placeholder="SA LOGIS MÉTROPOLE"></div>
@@ -238,6 +254,8 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
     <div class="boutons-sortie">
       <button class="bouton" id="btn-word-travail">Document de travail (Word)</button>
       <button class="bouton secondaire" id="btn-word-client">Document client (Word)</button>
+      <button class="bouton secondaire" id="btn-pdf-client">Document client (PDF)</button>
+      <button class="bouton secondaire" id="btn-mail-ehf">Demande d'état hypothécaire (mail)</button>
     </div>
     <div id="paint-zone">
       <div id="paint-etat"></div>
@@ -358,31 +376,74 @@ lireFichierDrive(`${PREFIXE_FICHIER}situation.json`)
   })
   .catch(e => { document.getElementById("etatbase").textContent = /Drive :/.test(e.message) ? `Données : ${e.message}` : "Données : Drive non connecté — ouvrez MORNING"; });
 
-/* ---------- suggestions de communes (fichier des communes) ---------- */
+/* ---------- suggestions de communes (fichier des communes) ----------
+   Réécrit le 05/10/2026 (JFD : « ça ne déroule pas assez vite, j'arrive à
+   cliquer ailleurs ») sur le modèle de PAINT, avec quatre garde-fous :
+   - la liste part dès la deuxième lettre, après 150 ms, et une réponse
+     ancienne arrivée en retard n'écrase jamais la plus récente ;
+   - le choix se fait à la souris (sur l'appui, avant que le champ perde la
+     main), au clavier (flèches, Entrée) ou d'office : en quittant le champ,
+     si le nom tapé correspond exactement à une proposition, elle est retenue ;
+   - la marque « ✓ Croix (59) — INSEE 59163 » dit ce qui est retenu, et une
+     marque rouge dit qu'aucune commune ne l'est ;
+   - la liste ne se ferme que si l'on clique hors du bloc du champ. */
+const sansAccent = t => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[-'’\s]+/g, " ").trim().toLowerCase();
 function brancherCommune(inputId, listeId, aideId, cle) {
   const input = document.getElementById(inputId), liste = document.getElementById(listeId), aide = document.getElementById(aideId);
-  let minuterie = null;
+  const bloc = input.closest(".suggest");
+  let minuterie = null, numero = 0, proposees = [], surligne = -1;
+  const fermer = () => { liste.style.display = "none"; surligne = -1; };
+  const marquer = (txt, cls) => { aide.textContent = txt; aide.className = "aide" + (cls ? " " + cls : ""); };
+  const retenir = c => {
+    etat[cle] = { code: c.code, nom: c.nom, dep: c.codeDepartement, codesPostaux: c.codesPostaux || [] };
+    input.value = c.nom; fermer();
+    marquer(`✓ ${c.nom} (${c.codeDepartement}) — INSEE ${c.code}`, "ok");
+    majBoutons();
+  };
+  const dessiner = () => {
+    liste.innerHTML = proposees.map((c, i) => {
+      const cp = (c.codesPostaux && c.codesPostaux[0]) || "";
+      return `<li role="option" data-i="${i}" class="${i === surligne ? "survol" : ""}">${c.nom}<span>${c.codeDepartement}${cp ? " · " + cp : ""} — ${c.departement?.nom ?? ""}</span></li>`;
+    }).join("");
+    liste.style.display = proposees.length ? "block" : "none";
+  };
   input.addEventListener("input", () => {
-    etat[cle] = null; aide.textContent = ""; majBoutons();
+    etat[cle] = null; marquer(""); majBoutons();
     clearTimeout(minuterie);
     const q = input.value.trim();
-    if (q.length < 2) { liste.style.display = "none"; return; }
+    if (q.length < 2) { proposees = []; fermer(); return; }
+    const n = ++numero;
     minuterie = setTimeout(async () => {
-      const r = await fetch(`${GEO}?nom=${encodeURIComponent(q)}&fields=code,nom,codeDepartement,departement&boost=population&limit=8`);
-      const communes = await r.json();
-      liste.innerHTML = communes.map(c =>
-        `<li role="option" data-code="${c.code}" data-nom="${c.nom}" data-dep="${c.codeDepartement}">${c.nom}<span>${c.codeDepartement} — ${c.departement?.nom ?? ""}</span></li>`).join("");
-      liste.style.display = communes.length ? "block" : "none";
-    }, 220);
+      try {
+        const r = await fetch(`${GEO}?nom=${encodeURIComponent(q)}&fields=code,nom,codeDepartement,departement,codesPostaux&boost=population&limit=8`);
+        const communes = await r.json();
+        if (n !== numero) return;                      // réponse dépassée par une frappe plus récente
+        proposees = Array.isArray(communes) ? communes : []; surligne = proposees.length ? 0 : -1;
+        dessiner();
+        if (!proposees.length) marquer("Aucune commune trouvée", "ko");
+      } catch { if (n === numero) marquer("Vérification indisponible (connexion ?)", "ko"); }
+    }, 150);
   });
-  liste.addEventListener("click", ev => {
+  // l'appui (et non le clic) : le choix est pris avant que le champ ne perde la main
+  liste.addEventListener("pointerdown", ev => {
     const li = ev.target.closest("li"); if (!li) return;
-    etat[cle] = { code: li.dataset.code, nom: li.dataset.nom, dep: li.dataset.dep };
-    input.value = li.dataset.nom; liste.style.display = "none";
-    aide.textContent = `${li.dataset.nom} (${li.dataset.dep}) — code ${li.dataset.code}`;
-    majBoutons();
+    ev.preventDefault(); retenir(proposees[+li.dataset.i]);
   });
-  document.addEventListener("click", ev => { if (!liste.contains(ev.target) && ev.target !== input) liste.style.display = "none"; });
+  input.addEventListener("keydown", ev => {
+    if (liste.style.display !== "block" || !proposees.length) { if (ev.key === "Enter") ev.preventDefault(); return; }
+    if (ev.key === "ArrowDown") { ev.preventDefault(); surligne = (surligne + 1) % proposees.length; dessiner(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); surligne = (surligne - 1 + proposees.length) % proposees.length; dessiner(); }
+    else if (ev.key === "Enter" || ev.key === "Tab") { if (ev.key === "Enter") ev.preventDefault(); retenir(proposees[Math.max(0, surligne)]); }
+    else if (ev.key === "Escape") fermer();
+  });
+  // en quittant le champ sans avoir choisi : nom exact → retenu d'office ; sinon, on le signale
+  input.addEventListener("blur", () => setTimeout(() => {
+    if (etat[cle] || !input.value.trim()) return;
+    const exact = proposees.find(c => sansAccent(c.nom) === sansAccent(input.value));
+    if (exact) retenir(exact);
+    else { fermer(); marquer("Commune non retenue : choisissez-la dans la liste", "ko"); }
+  }, 120));
+  document.addEventListener("pointerdown", ev => { if (!bloc.contains(ev.target)) fermer(); });
 }
 brancherCommune("commune", "sugg-commune", "commune-choisie", "communeRef");
 brancherCommune("commune-depot", "sugg-commune-depot", "commune-depot-choisie", "communeDepot");
@@ -542,9 +603,35 @@ document.getElementById("btn-lancer").addEventListener("click", async () => {
     for (const r of refs) resultats.push(await filiation(r));
     const j = { genere_le: new Date().toISOString(), nb_references: resultats.length, resultats };
     etat.resultats = j;
+    retenirCommuneDuLot();
     afficherResultats(j);
   } catch (e) { montrerErreur("Impossible d'établir la filiation : " + e.message); }
   finally { attente.style.display = "none"; }
+});
+
+/* ---------- enchaînement (05/10/2026) : la commune reste en mémoire ----------
+   Après une recherche, la commune du lot est posée dans l'onglet « Référence
+   cadastrale » (même si le lot venait d'une adresse ou d'un dépôt) ; le bouton
+   « Autre parcelle dans la même commune » y ramène, vide les références et
+   place le curseur dedans : on ne ressaisit que la parcelle. */
+function retenirCommuneDuLot() {
+  const r = etat.refs.find(x => x.retenue); if (!r) return;
+  if (etat.communeRef && depuisCode(etat.communeRef.code).dep === r.dep) {
+    const dc = depuisCode(etat.communeRef.code);
+    if (dc.com.padStart(3, "0") === String(r.com).padStart(3, "0")) return;     // déjà la bonne
+  }
+  const insee = r.dep.length === 3 ? r.dep + String(r.com).slice(-2) : r.dep + String(r.com).padStart(3, "0");
+  etat.communeRef = { code: insee, nom: r.communeNom, dep: r.dep, codesPostaux: etat.communeRef?.codesPostaux || [] };
+  document.getElementById("commune").value = r.communeNom;
+  const aide = document.getElementById("commune-choisie");
+  aide.textContent = `✓ ${r.communeNom} (${r.dep}) — INSEE ${insee}`; aide.className = "aide ok";
+}
+document.getElementById("btn-enchainer").addEventListener("click", () => {
+  document.querySelector('.onglets [data-onglet="reference"]').click();
+  const refs = document.getElementById("refs");
+  refs.value = ""; majBoutons();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  setTimeout(() => refs.focus(), 300);
 });
 
 /* ============================================================
@@ -561,15 +648,19 @@ function cellule(c, dep, com, prefixe) {   // "AC0026" ou " A0007" → référen
 }
 function libRef(p) { const pre = p.prefixe && p.prefixe !== "000" ? `${p.prefixe} ` : ""; return `${pre}${p.section} ${String(p.numero).replace(/^0+/, "")}`; }
 
-// contenance de la parcelle actuelle (API cadastre IGN) ; null si introuvable, sans blocage
+// parcelle actuelle à l'API cadastre IGN, mise en cache : une seule interrogation
+// par parcelle sert la contenance, le contour du plan PAINT et le lieu-dit
+const inseeDe = p => p.dep.length === 3 ? p.dep + p.com.slice(1) : p.dep + p.com;   // 971 + com → code INSEE sur 5
+const cacheParcellesIGN = new Map();
+function featureParcelle(p) {
+  const u = `${CADASTRE_PT}?code_insee=${inseeDe(p)}&section=${encodeURIComponent(p.section.padStart(2, "0"))}&numero=${p.numero}&com_abs=${p.prefixe}`;
+  if (!cacheParcellesIGN.has(u)) cacheParcellesIGN.set(u, fetch(u).then(r => r.json()).then(j => j.features?.[0] || null).catch(() => null));
+  return cacheParcellesIGN.get(u);
+}
+// contenance de la parcelle actuelle ; null si introuvable, sans blocage
 async function contenanceActuelle(p) {
-  try {
-    const insee = p.dep.length === 3 ? p.dep + p.com.slice(1) : p.dep + p.com;   // 971 + com → code INSEE sur 5
-    const u = `${CADASTRE_PT}?code_insee=${insee}&section=${encodeURIComponent(p.section.padStart(2, "0"))}&numero=${p.numero}&com_abs=${p.prefixe}`;
-    const j = await fetch(u).then(r => r.json());
-    const c = j.features?.[0]?.properties?.contenance;
-    return c != null ? Number(c) : null;
-  } catch { return null; }
+  const c = (await featureParcelle(p))?.properties?.contenance;
+  return c != null ? Number(c) : null;
 }
 
 // index d'une commune : clé de parcelle fille → [{doc, lot}]
@@ -648,6 +739,126 @@ async function filiation(refBrute) {
   };
 }
 
+/* ---------- désignation des parcelles (05/10/2026) ----------
+   Tableau « à la manière d'une désignation d'acte » en page de garde :
+   commune, préfixe, section, numéro, lieu-dit, contenance — lieu-dit et
+   contenance allés chercher, jamais saisis.
+   - CONTENANCE : API cadastre IGN (déjà interrogée pour la parcelle actuelle),
+     écrite comme dans les actes : « 00 ha 05 a 12 ca ».
+   - LIEU-DIT : l'API IGN ne le porte pas ; il vient du cadastre Etalab
+     (cadastre.data.gouv.fr, couche des lieux-dits de la commune, gratuite),
+     en cherchant le lieu-dit qui contient le centre de la parcelle.
+     Introuvable → tiret, sans blocage.
+   - CODE POSTAL (pour le mail d'instruction) : fichier des communes ;
+     première valeur si la commune en a plusieurs. */
+const ETALAB_CADASTRE = "https://cadastre.data.gouv.fr/data/etalab-cadastre/latest/geojson/communes";
+function haACa(m2) {
+  if (m2 == null || isNaN(m2)) return "—";
+  const v = Math.round(Number(m2)), ha = Math.floor(v / 10000), a = Math.floor((v % 10000) / 100), ca = v % 100;
+  const d = x => String(x).padStart(2, "0");
+  return `${d(ha)} ha ${d(a)} a ${d(ca)} ca`;
+}
+const cacheLieuxDits = new Map(), cacheCommunes = new Map();
+function lieuxDitsCommune(insee) {
+  if (!cacheLieuxDits.has(insee)) cacheLieuxDits.set(insee, (async () => {
+    try {
+      const dep = insee.startsWith("97") ? insee.slice(0, 3) : insee.slice(0, 2);
+      const rep = await fetch(`${ETALAB_CADASTRE}/${dep}/${insee}/cadastre-${insee}-lieux_dits.json.gz`);
+      if (!rep.ok) return [];
+      let octets = new Uint8Array(await rep.arrayBuffer());
+      if (octets[0] === 0x1f && octets[1] === 0x8b) {          // encore compressé : on décompresse dans le navigateur
+        const flux = new Blob([octets]).stream().pipeThrough(new DecompressionStream("gzip"));
+        octets = new Uint8Array(await new Response(flux).arrayBuffer());
+      }
+      const gj = JSON.parse(new TextDecoder().decode(octets));
+      return (gj.features || []).filter(f => f.geometry && f.properties?.nom);
+    } catch { return []; }
+  })());
+  return cacheLieuxDits.get(insee);
+}
+function dansAnneau(pt, anneau) {
+  let dedans = false;
+  for (let i = 0, j = anneau.length - 1; i < anneau.length; j = i++) {
+    const [xi, yi] = anneau[i], [xj, yj] = anneau[j];
+    if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) dedans = !dedans;
+  }
+  return dedans;
+}
+function dansGeometrie(pt, g) {
+  const polys = g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
+  return polys.some(poly => dansAnneau(pt, poly[0]) && !poly.slice(1).some(trou => dansAnneau(pt, trou)));
+}
+function pointInterieur(g) {                 // centre de l'emprise s'il tombe dans la parcelle, sinon moyenne des sommets
+  const anneau = g.type === "Polygon" ? g.coordinates[0] : g.type === "MultiPolygon" ? g.coordinates[0][0] : null;
+  if (!anneau) return null;
+  const xs = anneau.map(q => q[0]), ys = anneau.map(q => q[1]);
+  const c = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+  if (dansGeometrie(c, g)) return c;
+  return [xs.reduce((a, b) => a + b, 0) / xs.length, ys.reduce((a, b) => a + b, 0) / ys.length];
+}
+async function lieuDit(p) {
+  const f = await featureParcelle(p); if (!f?.geometry) return null;
+  const pt = pointInterieur(f.geometry); if (!pt) return null;
+  const ld = (await lieuxDitsCommune(inseeDe(p))).find(x => dansGeometrie(pt, x.geometry));
+  return ld ? ld.properties.nom : null;
+}
+function codePostal(p) {
+  const insee = inseeDe(p);
+  if (!cacheCommunes.has(insee)) cacheCommunes.set(insee,
+    fetch(`${GEO}/${insee}?fields=codesPostaux`).then(r => r.json()).then(c => (c.codesPostaux && c.codesPostaux[0]) || "").catch(() => ""));
+  return cacheCommunes.get(insee);
+}
+// lignes de désignation du lot, regroupées commune → section, parcelles en ordre numérique
+async function designationDuLot() {
+  const groupes = new Map();
+  for (const res of etat.resultats.resultats) {
+    const r = res.reference, k = `${r.dep}${r.com}|${r.section}`;
+    if (!groupes.has(k)) groupes.set(k, []);
+    groupes.get(k).push(res);
+  }
+  const tableaux = [];
+  for (const liste of groupes.values()) {
+    liste.sort((a, b) => +a.reference.numero - +b.reference.numero);
+    tableaux.push(await Promise.all(liste.map(async res => {
+      const r = res.reference;
+      return { res, etat: etatTrente(res), commune: nomCommune(r), prefixe: r.prefixe || "000", section: r.section,
+               numero: String(r.numero).replace(/^0+/, ""), lieudit: (await lieuDit(r)) || "—", contenance: haACa(r.contenance_m2) };
+    })));
+  }
+  return tableaux;
+}
+
+/* ---------- état de la filiation au regard des trente ans (05/10/2026) ----------
+   Même règle à l'écran (bandeau), dans le Word (pastilles, encadrés), dans le
+   PDF et pour le mail d'instruction :
+   VERT  — la filiation franchit les trente ans, ou bute sur un remembrement
+           (case cochée sur le maillon d'arrêt : il vaut origine trentenaire) ;
+   JAUNE — elle s'arrête avant, ou n'est pas trouvée : état hypothécaire
+           complémentaire à lever. */
+function remembrementCoche(res, num) {
+  const cb = document.querySelector(`.remembrement[data-ref="${cleRef(res.reference)}"][data-num="${num}"]`);
+  return !!(cb && cb.checked);
+}
+function etatTrente(res) {
+  if (!res.trouve) return { couleur: "jaune", motif: "absente", texte: "Aucune filiation dans le DFI — état hypothécaire complémentaire à lever" };
+  const dernier = res.maillons[res.maillons.length - 1];
+  if (remembrementCoche(res, dernier.num)) return { couleur: "vert", motif: "remembrement", dernier, texte: "Origine trentenaire atteinte (remembrement)" };
+  if (res.franchit_30_ans) return { couleur: "vert", motif: "trente", dernier, texte: "Origine trentenaire atteinte" };
+  return { couleur: "jaune", motif: "avant30", dernier, texte: `Filiation arrêtée en ${dernier.document.annee ?? "date inconnue"}, état hypothécaire complémentaire à lever` };
+}
+function majBandeau(res) {
+  const k = cleRef(res.reference), e = etatTrente(res);
+  const b = document.querySelector(`.bandeau-trente[data-k="${k}"]`);
+  if (b) { b.className = `bandeau-trente ${e.couleur}`; b.innerHTML = `<span class="pastille ${e.couleur}"></span><b>${e.texte}</b>`; }
+  const pa = document.querySelector(`.pastille-tete[data-k="${k}"]`);
+  if (pa) pa.className = `pastille pastille-tete ${e.couleur}`;
+}
+document.addEventListener("change", ev => {
+  if (!ev.target.classList.contains("remembrement") || !etat.resultats) return;
+  const res = etat.resultats.resultats.find(r => cleRef(r.reference) === ev.target.dataset.ref);
+  if (res) majBandeau(res);
+});
+
 /* ---------- affichage des résultats : du présent vers le passé ---------- */
 function surf(m2) { return m2 == null ? "" : `<span class="surf">${Number(m2).toLocaleString("fr-FR")} m²</span>`; }
 function cleRef(p) { return `${p.dep}-${p.com}-${p.prefixe}-${p.section}-${String(p.numero).padStart(4, "0")}`; }
@@ -662,11 +873,12 @@ function afficherResultats(j) {
     const ref = res.reference;
     let html = `<article class="parcelle">
       <div class="entete">
-        <span class="pastille ${res.alerte}"></span>
+        <span class="pastille pastille-tete" data-k="${cleRef(ref)}"></span>
         <h3>${ref.libelle}</h3>
         <span class="commune">${nomCommune(ref)}</span>
         ${res.plus_ancien_mouvement ? `<span class="compteur">plus ancien mouvement connu : ${res.plus_ancien_mouvement}</span>` : ""}
       </div>`;
+    html += `<div class="bandeau-trente" data-k="${cleRef(ref)}"></div>`;
     if (!res.trouve) {
       html += `<p class="rien">${res.message}</p></article>`;
       return html;
@@ -759,6 +971,7 @@ function afficherResultats(j) {
     return html;
   }).join("");
   document.getElementById("resultats").style.display = "block";
+  j.resultats.forEach(res => { if (res.trouve) res.maillons.forEach((m, i) => { m.num = i + 1; }); majBandeau(res); });
   tracerFrises();
   document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -899,9 +1112,7 @@ async function contoursSection(refs) {
   const out = [];
   for (const r of refs) {
     try {
-      const insee = r.dep.length === 3 ? r.dep + r.com.slice(1) : r.dep + r.com;
-      const u = `${CADASTRE_REF}?code_insee=${insee}&section=${encodeURIComponent(r.section.padStart(2, "0"))}&numero=${r.numero}&com_abs=${r.prefixe}`;
-      const f = (await fetch(u).then(x => x.json())).features?.[0];
+      const f = await featureParcelle(r);
       if (!f) { out.push({ ref: r, anneaux: null }); continue; }
       const g = f.geometry, anneaux = g.type === "Polygon" ? [g.coordinates[0]] : g.type === "MultiPolygon" ? g.coordinates.map(poly => poly[0]) : [];
       const lat = anneaux[0]?.[0]?.[1], zz = zoneDeLat(lat);
@@ -1031,10 +1242,6 @@ document.getElementById("btn-word-client").addEventListener("click", () => gener
 const MOIS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
 function dateLongue(iso) { const d = new Date(iso); return `${d.getDate()} ${MOIS[d.getMonth()]} ${d.getFullYear()}`; }
 function situationLongue(sit) { const [a, m] = String(sit || "").split("-"); return m ? `${MOIS[+m - 1]} ${a}` : (sit || "date inconnue"); }
-function remembrementCoche(res, num) {
-  const cb = document.querySelector(`.remembrement[data-ref="${cleRef(res.reference)}"][data-num="${num}"]`);
-  return !!(cb && cb.checked);
-}
 // Phrase rédigée d'un maillon — même formulation dans les deux versions
 function phraseMaillon(m) {
   const quand = m.document.date_effet ? ` le ${dateLongue(m.document.date_effet)}` : (m.document.annee ? ` en ${m.document.annee}` : "");
@@ -1064,7 +1271,14 @@ async function genererWord(version) {
   const dossier = document.getElementById("dossier").value.trim(), client = document.getElementById("client").value.trim(), collab = document.getElementById("collab").value.trim();
   const sit = (await lireFichierDrive(`${PREFIXE_FICHIER}situation.json`).catch(() => null))?.situation;
   const anneeCourante = new Date().getFullYear();
-  const NUIT = "0F2238", CANARD = "33838B", JAUNE = "FFE764", VERT = "2E8B57";
+  const NUIT = "0F2238", CANARD = "33838B", JAUNE = "FFE764", VERT = "2E8B57", JAUNE_TYPO = "FFC900", BLEU_GRIS = "657D96", GRIS_CLAIR = "F4F5F7";
+  // En-têtes de tableau (05/10/2026, JFD : « respecte FIDAL colors ») : le bleu nuit
+  // #0F2238 se lisait comme du noir ; on passe au bleu canard #33838B, texte blanc
+  // (combinaison AA de la charte, couleur des intertitres), filets bleu gris.
+  const FOND_ENTETE = CANARD;
+  const filetsTableau = { top: { style: D.BorderStyle.SINGLE, size: 4, color: BLEU_GRIS }, bottom: { style: D.BorderStyle.SINGLE, size: 4, color: BLEU_GRIS },
+    left: { style: D.BorderStyle.SINGLE, size: 4, color: BLEU_GRIS }, right: { style: D.BorderStyle.SINGLE, size: 4, color: BLEU_GRIS },
+    insideHorizontal: { style: D.BorderStyle.SINGLE, size: 4, color: BLEU_GRIS }, insideVertical: { style: D.BorderStyle.SINGLE, size: 4, color: BLEU_GRIS } };
 
   const T = (text, o = {}) => new D.TextRun({ text, font: "Segoe UI", size: 20, color: NUIT, ...o });
   const P = (text, o = {}) => new D.Paragraph({ children: [T(text, o.run || {})], spacing: { after: 120 }, ...o.par });
@@ -1073,7 +1287,7 @@ async function genererWord(version) {
   const cellule = (text, o = {}) => new D.TableCell({ children: [new D.Paragraph({ children: [T(text, { size: 18, ...(o.run || {}) })] })], shading: o.fond ? { type: D.ShadingType.CLEAR, fill: o.fond, color: "auto" } : undefined, margins: { top: 60, bottom: 60, left: 80, right: 80 }, width: o.largeur ? { size: o.largeur, type: D.WidthType.DXA } : undefined });
   // largeurs en vingtièmes de point : page A4 moins marges de 2 cm = 9 638
   const LARG_TRAVAIL = [480, 980, 1060, 640, 1500, 1000, 640, 700, 1500, 1138], LARG_CLIENT = [900, 3400, 5338];
-  const tableau = (lignes, largeurs) => new D.Table({ width: { size: largeurs.reduce((a, b) => a + b, 0), type: D.WidthType.DXA }, columnWidths: largeurs, rows: lignes.map((cells, i) => new D.TableRow({ tableHeader: i === 0, children: cells })) });
+  const tableau = (lignes, largeurs) => new D.Table({ width: { size: largeurs.reduce((a, b) => a + b, 0), type: D.WidthType.DXA }, columnWidths: largeurs, borders: filetsTableau, rows: lignes.map((cells, i) => new D.TableRow({ tableHeader: i === 0, children: cells })) });
 
   // --- regroupement : commune → section → parcelles en ordre numérique (unités foncières : à venir, hors groupe pour l'instant)
   const groupes = new Map();
@@ -1089,19 +1303,38 @@ async function genererWord(version) {
   const corps = [];
   // --- page de garde
   corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Georgia", size: 56, color: NUIT })], spacing: { before: 1600, after: 400 }, alignment: D.AlignmentType.CENTER }));
-  // sous chaque commune, les parcelles en TABLEAU (arbitrage JFD du 04/10/2026) : préfixe, section, numéro, contenance
-  const LARG_GARDE = [1300, 1300, 1300, 2000];
-  const celluleCentree = (text, o = {}) => new D.TableCell({ children: [new D.Paragraph({ children: [T(text, { size: 20, ...(o.run || {}) })], alignment: D.AlignmentType.CENTER })], shading: o.fond ? { type: D.ShadingType.CLEAR, fill: o.fond, color: "auto" } : undefined, margins: { top: 70, bottom: 70, left: 100, right: 100 }, width: { size: o.largeur, type: D.WidthType.DXA } });
-  for (const g of groupes.values()) {
-    corps.push(new D.Paragraph({ children: [T(`Commune de ${g.nom} (${g.dep})`, { size: 26 })], alignment: D.AlignmentType.CENTER, spacing: { before: 240, after: 160 } }));
-    const lignesGarde = [["Préfixe", "Section", "Numéro", "Contenance"].map((t, i) => celluleCentree(t, { run: { bold: true, color: "FFFFFF" }, fond: NUIT, largeur: LARG_GARDE[i] }))];
-    for (const res of [...g.sections.values()].flat()) {
-      const r = res.reference;
-      lignesGarde.push([r.prefixe || "000", r.section, String(r.numero).replace(/^0+/, ""), r.contenance_m2 != null ? `${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : "—"].map((t, i) => celluleCentree(t, { largeur: LARG_GARDE[i] })));
-    }
-    corps.push(new D.Table({ alignment: D.AlignmentType.CENTER, width: { size: LARG_GARDE.reduce((a, b) => a + b, 0), type: D.WidthType.DXA }, columnWidths: LARG_GARDE, rows: lignesGarde.map((cells, i) => new D.TableRow({ tableHeader: i === 0, children: cells })) }));
-    corps.push(P(""));
+  // TABLEAU DE DÉSIGNATION (05/10/2026) : à la manière d'un acte — commune, préfixe,
+  // section, numéro, lieu-dit, contenance ; UN TABLEAU PAR SECTION, séparés par une
+  // ligne ; en version de travail, une PASTILLE par parcelle (vert : origine
+  // trentenaire atteinte ; jaune : état hypothécaire complémentaire à lever) et la
+  // LÉGENDE au-dessus du premier tableau. La version client ne porte pas les
+  // pastilles : la couleur d'alerte en est retirée (arbitrage du 01/10/2026).
+  etatPaint("Désignation : lieux-dits et contenances…");
+  const designation = await designationDuLot();
+  const LARG_DESIGN = travail ? [400, 1700, 1050, 1050, 1050, 2388, 2000] : [2000, 1100, 1100, 1100, 2338, 2000];   // total 9 638 = largeur utile
+  const titresDesign = (travail ? [""] : []).concat(["Commune", "Préfixe", "Section", "Numéro", "Lieu-dit", "Contenance"]);
+  const celluleCentree = (text, o = {}) => new D.TableCell({ children: [new D.Paragraph({ children: [T(text, { size: 20, ...(o.run || {}) })], alignment: o.gauche ? D.AlignmentType.LEFT : D.AlignmentType.CENTER })], shading: o.fond ? { type: D.ShadingType.CLEAR, fill: o.fond, color: "auto" } : undefined, verticalAlign: D.VerticalAlign.CENTER, margins: { top: 70, bottom: 70, left: 100, right: 100 }, width: { size: o.largeur, type: D.WidthType.DXA } });
+  const pastille = couleur => new D.TextRun({ text: "●", font: "Segoe UI Symbol", size: 26, color: couleur === "vert" ? VERT : JAUNE_TYPO });
+  if (travail) {
+    // légende au-dessus du premier tableau, une couleur par ligne
+    corps.push(new D.Paragraph({ alignment: D.AlignmentType.LEFT, indent: { left: 400 }, spacing: { before: 120, after: 40 }, children: [
+      pastille("vert"), T("  Origine trentenaire atteinte", { size: 18 }) ] }));
+    corps.push(new D.Paragraph({ alignment: D.AlignmentType.LEFT, indent: { left: 400 }, spacing: { after: 200 }, children: [
+      pastille("jaune"), T("  Filiation arrêtée avant trente ans : état hypothécaire complémentaire à lever", { size: 18 }) ] }));
   }
+  designation.forEach((lignesSection, ti) => {
+    if (ti > 0) corps.push(P(""));                      // changement de section : une ligne, puis un nouveau tableau
+    const rows = [titresDesign.map((t, i) => celluleCentree(t, { run: { bold: true, color: "FFFFFF", size: 18 }, fond: FOND_ENTETE, largeur: LARG_DESIGN[i] }))];
+    lignesSection.forEach((l, li) => {
+      const fond = li % 2 ? GRIS_CLAIR : undefined;
+      const valeurs = [l.commune, l.prefixe, l.section, l.numero, l.lieudit, l.contenance];
+      const cells = valeurs.map((t, i) => celluleCentree(t, { fond, largeur: LARG_DESIGN[i + (travail ? 1 : 0)], gauche: i === 0 || i === 4 }));
+      if (travail) cells.unshift(new D.TableCell({ children: [new D.Paragraph({ children: [pastille(l.etat.couleur)], alignment: D.AlignmentType.CENTER })], shading: fond ? { type: D.ShadingType.CLEAR, fill: fond, color: "auto" } : undefined, verticalAlign: D.VerticalAlign.CENTER, width: { size: LARG_DESIGN[0], type: D.WidthType.DXA } }));
+      rows.push(cells);
+    });
+    corps.push(new D.Table({ alignment: D.AlignmentType.CENTER, width: { size: LARG_DESIGN.reduce((a, b) => a + b, 0), type: D.WidthType.DXA }, columnWidths: LARG_DESIGN, borders: filetsTableau, rows: rows.map((cells, i) => new D.TableRow({ tableHeader: i === 0, children: cells })) }));
+  });
+  corps.push(P(""));
   corps.push(new D.Paragraph({ children: [T([dossier ? `Dossier ${dossier}` : "", client].filter(Boolean).join(" — "), { size: 24 })], alignment: D.AlignmentType.CENTER, spacing: { before: 400, after: 120 } }));
   corps.push(new D.Paragraph({ children: [T(`Établi le ${dateLongue(new Date().toISOString())}`)], alignment: D.AlignmentType.CENTER }));
   if (travail && collab) corps.push(new D.Paragraph({ children: [T(`Validé par ${collab}`, { italics: true })], alignment: D.AlignmentType.CENTER, spacing: { before: 120 } }));
@@ -1141,11 +1374,10 @@ async function genererWord(version) {
         if (travail && m.surfaces.signale) corps.push(encadre(`Écart de surface à examiner : ${m.surfaces.somme_meres_m2.toLocaleString("fr-FR")} m² à l'origine contre ${m.surfaces.somme_filles_m2.toLocaleString("fr-FR")} m² après (${m.surfaces.ecart_pct} %).`, JAUNE));
       }
       // arrêt de la filiation
-      const dernier = res.maillons[res.maillons.length - 1];
-      const remembrement = remembrementCoche(res, dernier.num);
-      if (remembrement) {
+      const et = etatTrente(res), dernier = et.dernier;
+      if (et.motif === "remembrement") {
         corps.push(P(`Les parcelles d'origine ${dernier.parcelles_origine.map(o => o.libelle).join(", ")} sont issues d'un remembrement, qui vaut origine de propriété.`, { run: { color: VERT } }));
-      } else if (!res.franchit_30_ans) {
+      } else if (et.motif === "avant30") {
         corps.push(travail
           ? encadre(`La filiation s'arrête en ${dernier.document.annee ?? "date inconnue"}, en deçà des trente ans : un état hypothécaire complémentaire doit être levé.`, JAUNE)
           : P(`La filiation ne peut être retracée au-delà de ${dernier.document.annee ?? "cette date"} à partir des données cadastrales.`));
@@ -1156,7 +1388,7 @@ async function genererWord(version) {
         ? ["N°", "Parcelle", "Opération", "Année", "Nature", "Identifiant", "Lot", "Préfixe", "Parcelles d'origine", "Parcelles sœurs"]
         : ["Année", "Nature du document", "Filiation"];
       const largeurs = travail ? LARG_TRAVAIL : LARG_CLIENT;
-      const lignes = [entete.map((t, i) => cellule(t, { run: { bold: true, color: "FFFFFF" }, fond: NUIT, largeur: largeurs[i] }))];
+      const lignes = [entete.map((t, i) => cellule(t, { run: { bold: true, color: "FFFFFF" }, fond: FOND_ENTETE, largeur: largeurs[i] }))];
       let marqueurTab = false;
       for (const m of res.maillons) {
         if (!marqueurTab && m.document.au_dela_30_ans) {
@@ -1221,6 +1453,210 @@ async function genererWord(version) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `Origine cadastrale — ${nomBase} — ${travail ? "travail" : "client"} — ${new Date().toISOString().slice(0, 10)}.docx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+/* ============================================================
+   PDF DE LA VERSION CLIENT (05/10/2026) — la version de travail n'en a pas besoin
+   ------------------------------------------------------------
+   Produit dans le navigateur (bibliothèque pdfmake, chargée au premier clic),
+   même contenu que le Word client : page de garde et tableaux de désignation,
+   sommaire, une partie par section avec son plan PAINT, phrases rédigées,
+   phrase neutre d'arrêt, tableau allégé, papier à en-tête et pied DGFiP.
+   Limite assumée : Georgia et Segoe UI ne sont pas embarquables, le PDF est
+   composé en Roboto (police fournie avec pdfmake).
+   ============================================================ */
+document.getElementById("btn-pdf-client").addEventListener("click", () => genererPdfClient());
+function chargerScript(url) {
+  return new Promise((ok, ko) => { const sc = document.createElement("script"); sc.src = url; sc.onload = ok; sc.onerror = () => ko(new Error("chargement de " + url)); document.head.appendChild(sc); });
+}
+async function pdfmakePret() {
+  if (window.pdfMake?.createPdf && window.pdfMake.vfs) return window.pdfMake;
+  await chargerScript("https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js");
+  await chargerScript("https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.min.js");
+  return window.pdfMake;
+}
+// Roboto (police de pdfmake) n'a ni l'espace fine insécable des milliers ni la flèche :
+// on les remplace dans tout le contenu avant composition
+function nettoyerPdf(x) {
+  if (typeof x === "string") return x.replace(/[\u202F\u00A0]/g, " ").replace(/→/g, "»");
+  if (Array.isArray(x)) return x.map(nettoyerPdf);
+  if (x && typeof x === "object") { const o = {}; for (const [k, v] of Object.entries(x)) o[k] = (k === "image" || typeof v === "function") ? v : nettoyerPdf(v); return o; }
+  return x;
+}
+const versDataUrl = octets => { let b = ""; for (let i = 0; i < octets.length; i += 0x8000) b += String.fromCharCode.apply(null, octets.subarray(i, i + 0x8000)); return "data:image/png;base64," + btoa(b); };
+
+async function genererPdfClient() {
+  cacherErreur();
+  if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
+  let pdfMake;
+  try { pdfMake = await pdfmakePret(); } catch (e) { return montrerErreur("La bibliothèque PDF n'a pas pu être chargée (réseau ?)."); }
+  let plans;
+  try { plans = await assurerPlans(); } catch (e) { return montrerErreur(e.message); }
+  const dossier = document.getElementById("dossier").value.trim(), client = document.getElementById("client").value.trim();
+  const sit = (await lireFichierDrive(`${PREFIXE_FICHIER}situation.json`).catch(() => null))?.situation;
+  const NUIT = "#0F2238", CANARD = "#33838B", BLEU_GRIS = "#657D96", GRIS_CLAIR = "#F4F5F7";
+  etatPaint("Désignation : lieux-dits et contenances…");
+  const designation = await designationDuLot();
+
+  const contenu = [];
+  // --- page de garde
+  contenu.push({ text: "Origine cadastrale", style: "titre", margin: [0, 110, 0, 30] });
+  const filets = { hLineColor: () => BLEU_GRIS, vLineColor: () => BLEU_GRIS, hLineWidth: () => 0.5, vLineWidth: () => 0.5,
+                   fillColor: (i) => i === 0 ? CANARD : (i % 2 === 0 ? GRIS_CLAIR : null), paddingTop: () => 4, paddingBottom: () => 4 };
+  designation.forEach((lignesSection, ti) => {
+    contenu.push({ table: { headerRows: 1, widths: ["*", 50, 50, 50, "*", 90], body: [
+      ["Commune", "Préfixe", "Section", "Numéro", "Lieu-dit", "Contenance"].map(t => ({ text: t, bold: true, color: "#FFFFFF", alignment: "center", fontSize: 9 })),
+      ...lignesSection.map(l => [l.commune, l.prefixe, l.section, l.numero, l.lieudit, l.contenance].map((t, i) => ({ text: t, alignment: i === 0 || i === 4 ? "left" : "center" }))),
+    ] }, layout: filets, margin: [0, ti ? 14 : 0, 0, 0] });                 // changement de section : une ligne
+  });
+  contenu.push({ text: [dossier ? `Dossier ${dossier}` : "", client].filter(Boolean).join(" — "), alignment: "center", fontSize: 12, margin: [0, 30, 0, 6] });
+  contenu.push({ text: `Établi le ${dateLongue(new Date().toISOString())}`, alignment: "center", pageBreak: "after" });
+
+  // --- regroupement commune → section (même ordre que le Word)
+  const groupes = new Map();
+  for (const res of etat.resultats.resultats) {
+    const r = res.reference, kc = `${r.dep}${r.com}`;
+    if (!groupes.has(kc)) groupes.set(kc, { nom: nomCommune(r), sections: new Map() });
+    const g = groupes.get(kc);
+    if (!g.sections.has(r.section)) g.sections.set(r.section, []);
+    g.sections.get(r.section).push(res);
+  }
+  for (const g of groupes.values()) for (const l of g.sections.values()) l.sort((a, b) => +a.reference.numero - +b.reference.numero);
+
+  // --- sommaire
+  contenu.push({ text: "Sommaire", style: "h1" });
+  for (const g of groupes.values()) for (const [sec, l] of g.sections) contenu.push({ text: `Commune de ${g.nom} — section ${sec} : ${l.map(x => x.reference.libelle).join(", ")}`, margin: [0, 0, 0, 6] });
+
+  // --- une partie par section
+  for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
+    contenu.push({ text: `Commune de ${g.nom} — section ${sec}`, style: "h1", pageBreak: "before" });
+    const plan = plans.find(x => x.cle === `${liste[0].reference.dep}${liste[0].reference.com}|${sec}`);
+    for (const v of (plan?.vues || [])) contenu.push({ image: v.png, fit: [481, 560], alignment: "center", margin: [0, 0, 0, 10] });
+    if (plan?.sansContour?.length) contenu.push({ text: `Sans contour au plan cadastral : ${plan.sansContour.join(", ")}.`, italics: true, color: BLEU_GRIS });
+    for (const res of liste) {
+      const r = res.reference;
+      contenu.push({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2" });
+      if (!res.trouve) { contenu.push({ text: "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); continue; }
+      let marqueur = false;
+      for (const m of res.maillons) {
+        if (!marqueur && m.document.au_dela_30_ans) { contenu.push({ text: "— au-delà de trente ans —", italics: true, color: CANARD, alignment: "center", margin: [0, 2, 0, 6] }); marqueur = true; }
+        contenu.push({ text: phraseMaillon(m), margin: [0, 0, 0, 6] });
+      }
+      const et = etatTrente(res);
+      if (et.motif === "remembrement") contenu.push({ text: `Les parcelles d'origine ${et.dernier.parcelles_origine.map(o => o.libelle).join(", ")} sont issues d'un remembrement, qui vaut origine de propriété.`, margin: [0, 0, 0, 6] });
+      else if (et.motif === "avant30") contenu.push({ text: `La filiation ne peut être retracée au-delà de ${et.dernier.document.annee ?? "cette date"} à partir des données cadastrales.`, margin: [0, 0, 0, 6] });
+      const corpsTab = [["Année", "Nature du document", "Filiation"].map(t => ({ text: t, bold: true, color: "#FFFFFF", fontSize: 9 }))];
+      let marqueurTab = false;
+      for (const m of res.maillons) {
+        if (!marqueurTab && m.document.au_dela_30_ans) { corpsTab.push([{ text: "au-delà de trente ans", colSpan: 3, italics: true, fontSize: 8, color: CANARD, alignment: "center", fillColor: "#E6ECF2" }, {}, {}]); marqueurTab = true; }
+        corpsTab.push([String(m.document.annee ?? ""), m.document.nature_libelle, `${m.parcelles_origine.map(o => o.libelle).join(", ")} → ${m.parcelle.libelle}`]);
+      }
+      contenu.push({ table: { headerRows: 1, widths: [45, 170, "*"], body: corpsTab }, layout: { ...filets, fillColor: (i) => i === 0 ? CANARD : null }, margin: [0, 4, 0, 12] });
+    }
+  }
+
+  // --- papier à en-tête : logo rogné au plus près, Marianne, adresse, mention DGFiP, pagination
+  const [logoBrut, marianne] = await Promise.all([lireImageDrive(DRIVE_LOGO_FIDAL_ID), lireImageDrive(DRIVE_MARIANNE_ID)]);
+  const logo = logoBrut ? await rognerMarges(logoBrut) : null;
+  const logoUrl = logo ? versDataUrl(logo.octets) : null, marianneUrl = marianne ? versDataUrl(marianne) : null;
+  const def = {
+    pageSize: "A4", pageMargins: [57, 92, 57, 96],
+    info: { title: "Origine cadastrale", creator: "FIDAL Notaires — HISTO" },
+    defaultStyle: { font: "Roboto", fontSize: 10, color: NUIT, lineHeight: 1.15 },
+    styles: { titre: { fontSize: 28, alignment: "center", color: NUIT }, h1: { fontSize: 16, color: NUIT, margin: [0, 0, 0, 10] }, h2: { fontSize: 13, color: NUIT, margin: [0, 10, 0, 6] } },
+    header: () => ({ margin: [57, 28, 57, 0], stack: [
+      logoUrl ? { image: logoUrl, width: 137, alignment: "center" } : { text: "FIDAL NOTAIRES", alignment: "center", fontSize: 16, bold: true },
+      { canvas: [{ type: "line", x1: 0, y1: 6, x2: 481, y2: 6, lineWidth: 0.75, lineColor: NUIT }] } ] }),
+    footer: (page, total) => ({ margin: [57, 10, 57, 0], columns: [
+      ...(marianneUrl ? [{ image: marianneUrl, width: 52, margin: [0, 0, 10, 0] }] : []),
+      { width: "*", stack: [
+        { text: "3 Place de la Madeleine • 75008 PARIS • Tel : 01 44 51 01 23", alignment: "center", fontSize: 9 },
+        { text: "www.fidal.notaires.fr", alignment: "center", fontSize: 9 },
+        { text: `Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, alignment: "center", fontSize: 7.5, color: BLEU_GRIS, margin: [0, 2, 0, 0] },
+        { text: `Page ${page} / ${total}`, alignment: "center", fontSize: 8, color: BLEU_GRIS } ] } ] }),
+    content: nettoyerPdf(contenu),
+  };
+  const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();
+  pdfMake.createPdf(def).download(`Origine cadastrale — ${nomBase} — client — ${new Date().toISOString().slice(0, 10)}.pdf`);
+  etatPaint("PDF client produit.");
+}
+
+/* ============================================================
+   MAIL D'INSTRUCTION — DEMANDE D'ÉTAT HYPOTHÉCAIRE (05/10/2026)
+   ------------------------------------------------------------
+   Destinataire par défaut : Emma Bruneau. Objet : « Demande d'état
+   hypothécaire — Dossier » + la référence saisie dans HISTO.
+   Tableau : les parcelles en JAUNE (origine non assurée dans les trente ans)
+   et leur SEULE LIGNE D'ASCENDANCE DIRECTE — mères, grands-mères… — SANS les
+   parcelles sœurs ni les « tantes » ; colonnes commune, code postal, préfixe,
+   section, numéro (on s'arrête à la parcelle : ni lot de volume, ni lot de
+   copropriété, ni lieu-dit, ni contenance, ni référence de document).
+   Puis un lien de confirmation : il ouvre chez la collaboratrice un mail de
+   retour tout prêt (« Cette demande a bien été traitée et envoyée. »), objet
+   portant la référence du dossier ; un vrai bouton qui enverrait seul est
+   bloqué par toutes les messageries.
+   FORME : un message .eml marqué « non envoyé » — Outlook l'ouvre comme un
+   brouillon prêt à partir, avec son tableau et son lien (un lien « mailto »
+   ne sait porter que du texte brut). La signature Outlook ne s'y ajoute pas
+   d'elle-même : Insérer › Signature avant d'envoyer.
+   ============================================================ */
+const MAIL_EHF_DESTINATAIRE = "emma.bruneau@fidal.notaires.fr";
+const MAIL_EHF_CONFIRMATION = "jean-francois.dumetz@fidal.notaires.fr";   // destinataire du mail de retour
+document.getElementById("btn-mail-ehf").addEventListener("click", () => genererMailEhf());
+
+function ascendanceDirecte(res) {          // la parcelle puis ses mères, grands-mères… (jamais les sœurs)
+  const out = [res.reference], vus = new Set([cleRef(res.reference)]);
+  for (const m of (res.maillons || [])) for (const o of m.parcelles_origine) {
+    const k = cleRef(o); if (!vus.has(k)) { vus.add(k); out.push(o); }
+  }
+  return out;
+}
+const echapperHtml = t => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const enteteUtf8 = t => "=?UTF-8?B?" + btoa(unescape(encodeURIComponent(t))) + "?=";
+const base64Utf8Lignes = t => btoa(unescape(encodeURIComponent(t))).replace(/.{1,76}/g, "$&\r\n");
+
+async function genererMailEhf() {
+  cacherErreur();
+  if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
+  const dossier = document.getElementById("dossier").value.trim();
+  if (!dossier) { document.getElementById("dossier").focus(); return montrerErreur("Renseignez la référence du dossier : elle figure dans l'objet de la demande et de la confirmation."); }
+  const concernees = etat.resultats.resultats.filter(res => etatTrente(res).couleur === "jaune");
+  if (!concernees.length) return montrerErreur("Aucune parcelle du lot n'appelle d'état hypothécaire complémentaire : toutes atteignent l'origine trentenaire.");
+  const lignes = [], vues = new Set();
+  for (const res of concernees) for (const p of ascendanceDirecte(res)) {
+    const k = cleRef(p); if (vues.has(k)) continue; vues.add(k);
+    lignes.push({ commune: nomCommune(p), cp: await codePostal(p), prefixe: p.prefixe || "000", section: p.section, numero: String(p.numero).replace(/^0+/, "") });
+  }
+  const objet = `Demande d'état hypothécaire — Dossier ${dossier}`;
+  const objetRetour = `État hypothécaire traité — Dossier ${dossier}`;
+  const lienRetour = `mailto:${MAIL_EHF_CONFIRMATION}?subject=${encodeURIComponent(objetRetour)}&body=${encodeURIComponent("Cette demande a bien été traitée et envoyée.")}`;
+  const th = "background:#33838B;color:#FFFFFF;font-weight:bold;padding:5px 10px;border:1px solid #657D96;text-align:center";
+  const td = "padding:5px 10px;border:1px solid #657D96;text-align:center";
+  const html = `<html><head><meta charset="utf-8"></head><body style="font-family:'Segoe UI',Arial,sans-serif;font-size:10pt;color:#1A1A1A">
+<p>Bonjour,</p>
+<p>Merci de lever un état hypothécaire dans le cadre du dossier visé en objet, sur les parcelles dont les références suivent :</p>
+<table style="border-collapse:collapse;font-family:'Segoe UI',Arial,sans-serif;font-size:10pt">
+<tr><th style="${th}">Commune</th><th style="${th}">Code postal</th><th style="${th}">Préfixe</th><th style="${th}">Section</th><th style="${th}">Numéro</th></tr>
+${lignes.map((l, i) => `<tr${i % 2 ? ' style="background:#F4F5F7"' : ""}><td style="${td};text-align:left">${echapperHtml(l.commune)}</td><td style="${td}">${echapperHtml(l.cp)}</td><td style="${td}">${echapperHtml(l.prefixe)}</td><td style="${td}">${echapperHtml(l.section)}</td><td style="${td}">${echapperHtml(l.numero)}</td></tr>`).join("\n")}
+</table>
+<p>Une fois que cela est effectué, merci de confirmer en cliquant sur <a href="${echapperHtml(lienRetour)}" style="color:#33838B;text-decoration:underline">ce lien</a>.</p>
+<p>Bonne journée</p>
+</body></html>`;
+  const eml = [
+    `To: ${MAIL_EHF_DESTINATAIRE}`,
+    `Subject: ${enteteUtf8(objet)}`,
+    "X-Unsent: 1",
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Utf8Lignes(html),
+  ].join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([eml], { type: "message/rfc822" }));
+  a.download = `Demande EHF — Dossier ${dossier.replace(/[\\/:*?"<>|]/g, " ")}.eml`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }

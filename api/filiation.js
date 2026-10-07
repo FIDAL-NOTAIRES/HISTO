@@ -26,7 +26,8 @@
 //
 // Variables d'environnement (facultatives) :
 //   HISTO_ORIGINES   origines autorisées, séparées par des virgules
-//                    (par défaut : HISTO et FUSION ; ajouter celle de MARTEAU)
+//                    (par défaut : HISTO, FUSION et MARTEAU ; si renseignée,
+//                    elle REMPLACE la liste par défaut — y remettre les trois)
 // ============================================================
 
 const VERSION_CONTRAT = "1.0";
@@ -40,6 +41,7 @@ const DRIVE = "https://www.googleapis.com/drive/v3/files";
 const ORIGINES_PAR_DEFAUT = [
   "https://histo-sand.vercel.app",
   "https://fusion-three-kappa.vercel.app",
+  "https://marteau-rho.vercel.app",
 ];
 
 const LIBELLES_DOCUMENT = {
@@ -81,7 +83,11 @@ const parcelle = (p, extra = {}) => ({
   insee: inseeDe(p), dep: p.dep, com: p.com, prefixe: p.prefixe, section: p.section,
   numero: String(p.numero).replace(/^0+/, "") || "0", libelle: libRef(p), ...extra,
 });
-const dateIso = d => d && /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : null;
+// Date d'effet : charge_dfi.py l'écrit déjà en AAAA-MM-JJ ; la forme brute DGFiP AAAAMMJJ est aussi acceptée
+const dateIso = d => { const v = String(d ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  if (/^\d{8}$/.test(v)) return `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
+  return null; };
 
 // ============================================================
 //   NATURE DU MOUVEMENT — qualifiée par HISTO seul (06/10/2026)

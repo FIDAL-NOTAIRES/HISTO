@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "api/filiation.js": { "maxDuration": 60 }
+  }
+}

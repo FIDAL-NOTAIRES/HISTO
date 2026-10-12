@@ -188,6 +188,25 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
 #paint-consigne{background:#FFF3C4;border-left:4px solid var(--orange);padding:10px 14px;border-radius:3px;margin-bottom:10px;font-size:.92rem}
 .miniplan{max-width:100%;max-height:260px;border:1px solid var(--trait);border-radius:4px;margin:6px 0 10px;display:block}
 #attente{display:none;margin-top:22px;color:var(--nuit)}
+/* ---- liste d'ensemble et écran de détail (12/10/2026) ---- */
+#reserve-fiches{position:absolute;left:-20000px;top:0;width:940px;visibility:hidden}
+body.detail-ouvert main{max-width:1320px}
+.lot-entete{font-size:.92rem;color:#5B6B7B;margin:0 0 12px}
+.lot-ligne{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;background:var(--papier);
+  border:1px solid var(--trait);border-left:5px solid var(--trait);border-radius:6px;padding:12px 16px;margin-bottom:10px;cursor:pointer}
+.lot-ligne:hover,.lot-ligne:focus-visible{border-color:var(--canard)}
+.lot-ligne.vert{border-left-color:var(--vert)}.lot-ligne.jaune{border-left-color:var(--jaune-texte)}.lot-ligne.carmin{border-left-color:var(--carmin)}
+.lot-ligne .ref{font-family:Georgia,serif;font-size:1.15rem;color:var(--nuit)}
+.lot-ligne .commune{color:#5B6B7B;margin-left:6px}
+.lot-ligne .etat{display:block;font-size:.88rem;color:#5B6B7B;margin-top:2px}
+.lot-ligne .voir{font-size:.88rem;color:var(--canard);white-space:nowrap}
+.detail-tete{margin:0 0 14px}
+.detail-grille{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;align-items:start}
+@media(max-width:1000px){.detail-grille{grid-template-columns:1fr}}
+.detail-plan{background:var(--papier);border:1px solid var(--trait);border-radius:6px;padding:14px 16px;position:sticky;top:12px}
+.detail-plan h3{font-size:1.1rem;margin-bottom:10px}
+.vignette-corps img{display:block;max-width:100%;height:auto;border:1px solid var(--trait);border-radius:4px}
+.vignette-attente{font-size:.9rem;color:#5B6B7B;padding:34px 8px;text-align:center}
 .erreur{background:#FBE9EE;border-left:4px solid var(--carmin);padding:10px 14px;border-radius:3px;margin-top:14px}
 </style>
 </head>
@@ -298,7 +317,20 @@ tr.damier td span{display:block;font-family:Georgia,serif;font-size:.8rem;color:
       <div id="paint-cadre"><div id="paint-consigne"></div></div>
     </div>
     <!-- 05/10/2026 : case « remembrement » retirée (consultation directe : HISTO n'a pas cette information) -->
-    <div id="liste-resultats"></div>
+    <!-- ÉCRAN DE DÉTAIL (12/10/2026, arbitrages vocaux) : la liste d'ensemble du lot, dans un ordre
+         fixe (commune, section, numéro), sans tri ni filtre ; un clic ouvre la parcelle — généalogie à
+         gauche, plan colorisé en vignette à droite ; un simple bouton de retour à la liste. -->
+    <div id="vue-liste"><div id="liste-resultats"></div></div>
+    <div id="vue-detail" hidden>
+      <div class="detail-tete"><button class="bouton secondaire" id="btn-retour-liste">← Retour à la liste</button></div>
+      <div class="detail-grille">
+        <div class="detail-fiche"></div>
+        <aside class="detail-plan"><h3>Plan cadastral</h3><div class="vignette-corps"></div></aside>
+      </div>
+    </div>
+    <!-- les fiches de toutes les parcelles restent construites ici, hors de la vue : les documents
+         Word et PDF y prennent l'image de chaque arbre ; la fiche ouverte est déplacée dans le détail -->
+    <div id="reserve-fiches" aria-hidden="true"></div>
   </section>
 </main>
 
@@ -1129,11 +1161,13 @@ function nomCommune(ref) { const r = etat.refs.find(x => x.dep === ref.dep && x.
 function afficherResultats(j) {
   friseATracer.length = 0;
   etat.plans = null; zonePaint().classList.remove("actif");
-  const zone = document.getElementById("liste-resultats");
+  etat.vignettes = new Map(); etat.detail = null;
+  document.querySelector("#vue-detail .detail-fiche").innerHTML = "";
+  const zone = document.getElementById("reserve-fiches");
   const anneeCourante = new Date().getFullYear();
   zone.innerHTML = j.resultats.map(res => {
     const ref = res.reference;
-    let html = `<article class="parcelle">
+    let html = `<article class="parcelle" data-k="${cleRef(ref)}">
       <div class="entete">
         <span class="pastille pastille-tete" data-k="${cleRef(ref)}"></span>
         <h3>${ref.libelle}</h3>
@@ -1259,8 +1293,135 @@ function afficherResultats(j) {
   document.getElementById("resultats").style.display = "block";
   j.resultats.forEach(res => { if (res.trouve) res.maillons.forEach((m, i) => { m.num = i + 1; }); majBandeau(res); });
   tracerFrises();
+  afficherListe(j);
+  if (j.resultats.length === 1) ouvrirDetail(j.resultats[0]);     // une seule parcelle : le détail directement
+  else montrerListe();
   document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+/* ---------- LISTE D'ENSEMBLE ET ÉCRAN DE DÉTAIL (12/10/2026) ----------
+   Ordre fixe commune, section, numéro ; ni tri ni filtre (arbitrage). Le détail montre la
+   fiche de la parcelle (bandeau, frise, tableau) et, à droite, le plan colorisé par PAINT,
+   découpé serré autour de la parcelle avec ses voisines : préparé à la première ouverture,
+   puis gardé en mémoire pour la session. */
+function afficherListe(j) {
+  const ordre = [...j.resultats].sort((a, b) => nomCommune(a.reference).localeCompare(nomCommune(b.reference), "fr")
+    || String(a.reference.section).localeCompare(String(b.reference.section), "fr") || (+a.reference.numero - +b.reference.numero));
+  const etats = ordre.map(etatTrente), n = ordre.length;
+  const nb = c => etats.filter(e => e.couleur === c).length, pl = (k, s) => k > 1 ? s : "";
+  const resume = [`${nb("vert")} d'origine trentenaire atteinte`, `${nb("jaune")} à compléter par un état hypothécaire`]
+    .concat(nb("carmin") ? [`${nb("carmin")} introuvable${pl(nb("carmin"), "s")}`] : []).join(", ");
+  document.getElementById("liste-resultats").innerHTML =
+    `<p class="lot-entete">${n} parcelle${pl(n, "s")} : ${resume}. Cliquez une parcelle pour voir sa filiation et son plan.</p>`
+    + ordre.map((res, i) => { const e = etats[i], r = res.reference;
+      return `<div class="lot-ligne ${e.couleur}" role="button" tabindex="0" data-k="${cleRef(r)}">
+        <span class="pastille ${e.couleur}"></span>
+        <span><span class="ref">${echapperHtml(r.libelle)}</span><span class="commune">${echapperHtml(nomCommune(r))}</span>${r.contenance_m2 != null ? surf(r.contenance_m2) : ""}
+          <span class="etat">${echapperHtml(e.texte)}</span></span>
+        <span class="voir">Voir la filiation ›</span></div>`; }).join("");
+}
+const resultatParCle = k => (etat.resultats?.resultats || []).find(r => cleRef(r.reference) === k);
+function rangerFiche() {
+  const reserve = document.getElementById("reserve-fiches");
+  document.querySelectorAll("#vue-detail .detail-fiche article.parcelle").forEach(a => reserve.appendChild(a));
+}
+function montrerListe() {
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  rangerFiche();
+  document.getElementById("vue-detail").hidden = true;
+  document.getElementById("vue-liste").hidden = false;
+  document.body.classList.remove("detail-ouvert");
+  etat.detail = null;
+  tracerFrises();
+}
+function ouvrirDetail(res) {
+  const k = cleRef(res.reference);
+  rangerFiche();
+  const art = document.querySelector(`#reserve-fiches article.parcelle[data-k="${k}"]`);
+  if (art) document.querySelector("#vue-detail .detail-fiche").appendChild(art);
+  document.getElementById("vue-liste").hidden = true;
+  document.getElementById("vue-detail").hidden = false;
+  document.getElementById("btn-retour-liste").hidden = (etat.resultats?.resultats?.length || 0) <= 1;
+  document.body.classList.add("detail-ouvert");
+  etat.detail = k;
+  tracerFrises();
+  afficherVignette(res);
+  document.getElementById("vue-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+document.getElementById("liste-resultats").addEventListener("click", ev => {
+  const l = ev.target.closest(".lot-ligne"); if (!l) return;
+  const res = resultatParCle(l.dataset.k); if (res) ouvrirDetail(res);
+});
+document.getElementById("liste-resultats").addEventListener("keydown", ev => {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const l = ev.target.closest(".lot-ligne"); if (!l) return;
+  ev.preventDefault(); const res = resultatParCle(l.dataset.k); if (res) ouvrirDetail(res);
+});
+document.getElementById("btn-retour-liste").addEventListener("click", () => {
+  montrerListe();
+  document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+/* ---------- VIGNETTE DU PLAN ----------
+   Un plan PAINT pour la parcelle seule (même chaîne que les plans du Word), découpé autour de
+   l'emprise coloriée que PAINT renvoie (histo-pont.js v4) : la parcelle et une marge de 60 % de
+   sa plus grande dimension, 80 px au moins. Les demandes passent une par une : deux ouvertures
+   rapprochées ne lancent pas deux PAINT en même temps. */
+let fileVignettes = Promise.resolve();
+const MARGE_VIGNETTE = 0.6, MARGE_VIGNETTE_MIN_PX = 80, VIGNETTE_MAX_PX = 900;
+function produireVignette(res) {
+  const tache = fileVignettes.then(async () => {
+    const r = res.reference;
+    const vues = grouperEnVues(await contoursSection([r]));
+    if (!vues.length) throw new Error("parcelle sans contour au plan cadastral actuel");
+    const plan = await demanderPlan(parametresPaint(vues[0], nomCommune(r)), `vignette ${r.libelle}`);
+    if (!plan.ok) throw new Error(plan.message || "PAINT n'a pas rendu le plan");
+    return decouperVignette(plan);
+  });
+  fileVignettes = tache.catch(() => {});
+  return tache;
+}
+async function decouperVignette(plan) {
+  const img = new Image(); img.src = plan.png; await img.decode();
+  const W = img.naturalWidth, H = img.naturalHeight;
+  let e = plan.emprise, note = plan.manuel ? "Plan colorié à la main dans PAINT." : "";
+  if (!e || !(e.x1 > e.x0 && e.y1 > e.y0)) {
+    e = { x0: 0, y0: 0, x1: W - 1, y1: H - 1 };
+    note = (note ? note + " " : "") + "Plan entier : PAINT n'a pas indiqué l'emplacement de la parcelle.";
+  }
+  const m = Math.max(MARGE_VIGNETTE_MIN_PX, Math.round(MARGE_VIGNETTE * Math.max(e.x1 - e.x0, e.y1 - e.y0)));
+  const x0 = Math.max(0, e.x0 - m), y0 = Math.max(0, e.y0 - m), x1 = Math.min(W, e.x1 + 1 + m), y1 = Math.min(H, e.y1 + 1 + m);
+  const cw = x1 - x0, ch = y1 - y0, f = Math.min(1, VIGNETTE_MAX_PX / Math.max(cw, ch));
+  const cv = document.createElement("canvas"); cv.width = Math.round(cw * f); cv.height = Math.round(ch * f);
+  cv.getContext("2d").drawImage(img, x0, y0, cw, ch, 0, 0, cv.width, cv.height);
+  return { png: cv.toDataURL("image/png"), note };
+}
+function afficherVignette(res) {
+  const k = cleRef(res.reference), corps = document.querySelector("#vue-detail .vignette-corps");
+  if (estIntrouvable(res)) { corps.innerHTML = `<p class="vignette-attente">Référence introuvable : pas de plan à afficher.</p>`; return; }
+  const v = etat.vignettes.get(k);
+  if (v && v.png) {
+    corps.innerHTML = `<img alt="Plan cadastral de la parcelle ${echapperHtml(res.reference.libelle)}" src="${v.png}">`
+      + (v.note ? `<p class="aide">${echapperHtml(v.note)}</p>` : "");
+    return;
+  }
+  if (v && v.erreur) {
+    corps.innerHTML = `<p class="vignette-attente">Plan non obtenu : ${echapperHtml(v.erreur)}.</p>
+      <div class="actions" style="justify-content:center;margin-top:0"><button class="bouton secondaire" data-reessayer="${k}">Réessayer</button></div>`;
+    return;
+  }
+  corps.innerHTML = `<p class="vignette-attente">Plan colorisé en préparation… (quelques secondes)</p>`;
+  if (!v) {
+    const suite = r => { etat.vignettes.set(k, r); if (etat.detail === k) afficherVignette(res); };
+    etat.vignettes.set(k, { enCours: true });
+    produireVignette(res).then(suite).catch(e => suite({ erreur: (e && e.message) || String(e) }));
+  }
+}
+document.getElementById("vue-detail").addEventListener("click", ev => {
+  const b = ev.target.closest("[data-reessayer]"); if (!b) return;
+  etat.vignettes.delete(b.dataset.reessayer);
+  const res = resultatParCle(b.dataset.reessayer); if (res) afficherVignette(res);
+});
 
 /* EN-TÊTES DÉPLIÉS (12/10/2026) : la liste des références s'ouvre sous l'année et
    pousse les boîtes vers le bas. Toutes les colonnes d'une même frise reçoivent la
@@ -1643,7 +1804,7 @@ function demanderPlan(qs, libelle) {
         afficherRelevePaint(); return;
       }
       if (d.type === "paint-pret") { nouvelleEtape("PAINT prêt, paramètres envoyés", Date.now()); ifr.contentWindow.postMessage({ type: "paint-params", qs }, PAINT_ORIGINE); }
-      else if (d.type === "paint-image") terminer({ ok: true, png: d.png, largeur: d.largeur, hauteur: d.hauteur, manuel: d.manuel, reserve: d.reserve });
+      else if (d.type === "paint-image") terminer({ ok: true, png: d.png, largeur: d.largeur, hauteur: d.hauteur, manuel: d.manuel, reserve: d.reserve, emprise: d.emprise || null });
       else if (d.type === "paint-echec") terminer({ ok: false, message: d.message });
       else if (d.type === "paint-attente-manuelle") {
         // décision du 01/10 : on bloque, le collaborateur colorie à la main dans PAINT puis transmet

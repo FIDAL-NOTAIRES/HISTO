@@ -359,55 +359,14 @@ const MemoireLocale = (() => {
 })();
 
 const cacheFichiers = new Map();
-/* Papier à en-tête (arbitrage JFD du 04/10/2026) : logo FIDAL NOTAIRES et Marianne
-   sont lus sur le Drive au moment de la génération, avec le jeton déjà obtenu —
-   mêmes fichiers que le modèle de courrier du cabinet (mémoire FIDAL colors).
-   Si une image manque, le document se fait sans elle (en-tête texte de repli). */
-// 12/10/2026 (JFD) : nouveau logo « logo 2.png » du dossier « papier en tete » (1790 × 545 px),
-// à la place de « 20260524 Logo FIDAL NOTAIRES.png » (1rmqrW3gFw9_S7rHzCeuVO1rhkbMPznXv, 432 × 164 px)
-const DRIVE_LOGO_FIDAL_ID = "1eWS3OKIQtDqWdkDQjaij9rU4RhIArsHU";
-const DRIVE_MARIANNE_ID   = "1cl1BtO48H4DYbZWw3aqkMQMqz5XGBfTM";   // 471 × 407 px
-const cacheImages = new Map();
-async function lireImageDrive(id) {                 // Uint8Array, ou null si illisible
-  if (cacheImages.has(id)) return cacheImages.get(id);
-  let octets = null;
-  try {
-    const t = await jeton();
-    const rep = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${t}` } });
-    if (rep.ok) octets = new Uint8Array(await rep.arrayBuffer());
-  } catch (_) { /* repli silencieux */ }
-  cacheImages.set(id, octets);
-  return octets;
-}
-/* Rogne les marges blanches ou transparentes d'une image PNG (le logo du Drive
-   fait 441 × 235 px avec de larges marges : posé tel quel dans un cadre aux
-   proportions du logo utile, il paraissait écrasé — constat JFD du 05/10/2026).
-   Même geste que la lettre de mission : « recadré au plus près ». Rend
-   { octets, largeur, hauteur } ; en cas d'échec, l'image d'origine et ses dimensions. */
-async function rognerMarges(octets) {
-  try {
-    const bitmap = await createImageBitmap(new Blob([octets], { type: "image/png" }));
-    const cv = document.createElement("canvas"); cv.width = bitmap.width; cv.height = bitmap.height;
-    const g = cv.getContext("2d"); g.drawImage(bitmap, 0, 0);
-    const d = g.getImageData(0, 0, cv.width, cv.height).data;
-    let x0 = cv.width, y0 = cv.height, x1 = -1, y1 = -1;
-    for (let y = 0; y < cv.height; y++) for (let x = 0; x < cv.width; x++) {
-      const i = (y * cv.width + x) * 4;
-      const plein = d[i + 3] > 20 && (d[i] + d[i + 1] + d[i + 2]) < 740;   // ni transparent ni blanc
-      if (plein) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    }
-    if (x1 < 0) return { octets, largeur: bitmap.width, hauteur: bitmap.height };
-    const marge = 2;
-    x0 = Math.max(0, x0 - marge); y0 = Math.max(0, y0 - marge);
-    x1 = Math.min(cv.width - 1, x1 + marge); y1 = Math.min(cv.height - 1, y1 + marge);
-    const cv2 = document.createElement("canvas"); cv2.width = x1 - x0 + 1; cv2.height = y1 - y0 + 1;
-    cv2.getContext("2d").drawImage(cv, x0, y0, cv2.width, cv2.height, 0, 0, cv2.width, cv2.height);
-    const blob = await new Promise(r => cv2.toBlob(r, "image/png"));
-    return { octets: new Uint8Array(await blob.arrayBuffer()), largeur: cv2.width, hauteur: cv2.height };
-  } catch (_) {
-    return { octets, largeur: 0, hauteur: 0 };
-  }
-}
+/* PAPIER À EN-TÊTE DU CABINET (12/10/2026, JFD : « ça doit plus ressembler à ça ») : reproduit le
+   modèle de courrier Word du cabinet. Le logo « FIDAL NOTAIRES / Notaires de France » (521 × 158 px,
+   bleu nuit) est extrait de ce modèle et INTÉGRÉ ICI : le papier à en-tête ne dépend plus d'aucun
+   fichier du Drive (remplace le logo et la Marianne lus sur le Drive depuis le 04/10/2026). */
+const LOGO_ENTETE_PNG_B64 = "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";
+const BUREAUX_CABINET = ["PARIS", "LA MADELEINE", "CAEN", "LYON", "RENNES", "SAINT-HERBLAIN"];
+const ADRESSE_CABINET = "3, Place de la Madeleine – 75008 PARIS";
+const COURRIEL_CABINET = "accueil@fidal.notaires.fr", TELEPHONE_CABINET = "+33 (0)1 44 51 01 23";
 async function chercherIdDrive(nom, t) {
   let q = `name = '${nom}' and trashed = false`;
   if (DRIVE_DOSSIER_HISTO_ID) q += ` and '${DRIVE_DOSSIER_HISTO_ID}' in parents`;
@@ -1262,7 +1221,7 @@ function afficherResultats(j) {
       const p = n.parcelle, actuelle = n.cle === "auj";
       return `<div class="boite ${actuelle ? "actuelle" : n.couleur}" data-k="${cleRef(p)}"><span class="ref"><small>${p.prefixe}</small>${p.section} ${String(p.numero).replace(/^0+/, "")}</span>${p.contenance_m2 != null ? `<span class="surf">${Number(p.contenance_m2).toLocaleString("fr-FR")} m²</span>` : ""}</div>`;
     }
-    const idFrise = `frise-${res.reference.dep}${res.reference.com}-${res.reference.section}${res.reference.numero}`.replace(/\W/g, "");
+    const idFrise = idFriseDe(res.reference);
     html += `<div class="frise" id="${idFrise}"><div class="colonnes">${colonnes.filter(c => c.noeuds.size).map((c, i) =>
       `<div class="colonne p${i % 4}${c.ancien ? " ancien" : ""}">${enteteColonne(c)}${[...c.noeuds.values()].map(boite).join("")}</div>`).join("")}</div><svg></svg></div>
       <p class="legende-arbre">Trait : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:var(--orange)"></i>contradiction avec un acte <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 6px,#fff 6px 11px)"></i>au-delà de trente ans · un tronc par document, l'année sur le tronc · « + » sous l'année : références des documents</p>`;
@@ -1412,6 +1371,78 @@ function tracerFrises() {
   }
 }
 window.addEventListener("resize", tracerFrises);
+const idFriseDe = ref => `frise-${ref.dep}${ref.com}-${ref.section}${ref.numero}`.replace(/\W/g, "");
+
+/* ============================================================
+   ARBRE DE FILIATION DANS LES DOCUMENTS (12/10/2026, JFD : « sur le PDF client je n'ai pas
+   l'arbre généalogique ») — la frise de l'écran est redessinée en image (mêmes colonnes,
+   mêmes boîtes, mêmes troncs) pour le Word et le PDF.
+   - version de travail : couleurs de fiabilité (vert, jaune, orange) ;
+   - version client : traits en bleu canard uni, sans couleur d'alerte (comme le reste du
+     document client), pointillé au-delà de trente ans conservé ;
+   - l'image est prise références repliées et à l'échelle réelle, puis l'écran est rétabli.
+   ============================================================ */
+const COULEURS_ARBRE = { vert: "#2E8B57", jaune: "#FFC900", orange: "#FF982D" };
+async function imageArbre(res, travail) {
+  const frise = document.getElementById(idFriseDe(res.reference)); if (!frise) return null;
+  const ouverts = [...frise.querySelectorAll('.deplier[aria-expanded="true"]')], zoom = frise.style.zoom;
+  const basculer = (b, ouvert) => { b.setAttribute("aria-expanded", String(ouvert)); b.textContent = ouvert ? "−" : "+"; b.closest(".epoque").querySelector(".refs-doc").hidden = !ouvert; };
+  // à l'écran la frise s'étire sur toute la largeur ; pour l'image, on la prend à sa largeur naturelle
+  const bloc = frise.querySelector(".colonnes"), largeurEcran = bloc.style.width;
+  ouverts.forEach(b => basculer(b, false)); frise.style.zoom = ""; bloc.style.width = "max-content"; alignerEntetes(frise); tracerFrises();
+  try { return await dessinerArbre(frise, travail); }
+  catch (_) { return null; }                       // l'arbre ne doit jamais bloquer le document
+  finally { ouverts.forEach(b => basculer(b, true)); frise.style.zoom = zoom; bloc.style.width = largeurEcran; alignerEntetes(frise); tracerFrises(); }
+}
+async function dessinerArbre(frise, travail) {
+  const bloc = frise.querySelector(".colonnes"), c = bloc.getBoundingClientRect();
+  const W = Math.ceil(bloc.scrollWidth), H = Math.ceil(bloc.scrollHeight);
+  const rel = r => ({ x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height });
+  const couleur = k => travail ? COULEURS_ARBRE[k] || COULEURS_ARBRE.vert : "#33838B";
+  // un texte de l'écran, recopié à sa place exacte avec sa police
+  const ecrire = noeud => {
+    const contenu = noeud.textContent.trim(); if (!contenu) return "";
+    const plage = document.createRange(); plage.selectNodeContents(noeud);
+    const r = rel(plage.getBoundingClientRect()), st = getComputedStyle(noeud.nodeType === 1 ? noeud : noeud.parentElement);
+    return `<text x="${r.x.toFixed(1)}" y="${(r.y + r.h * 0.78).toFixed(1)}" font-family="${echapperHtml(st.fontFamily)}" font-size="${st.fontSize}" font-weight="${st.fontWeight}" fill="${st.color}">${echapperHtml(contenu)}</text>`;
+  };
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#FFFFFF"/>`;
+  for (const col of frise.querySelectorAll(".colonne")) {       // fonds de période et années
+    const r = rel(col.getBoundingClientRect());
+    s += `<rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.w.toFixed(1)}" height="${r.h.toFixed(1)}" fill="${getComputedStyle(col).backgroundColor}"/>`;
+    if (col.classList.contains("ancien")) s += `<rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.w.toFixed(1)}" height="3" fill="#0F2238"/>`;
+    for (const n of col.querySelector(".epoque").childNodes) if (n.nodeType === 3 || n.nodeName === "SMALL") s += ecrire(n);
+  }
+  for (const el of frise.querySelector("svg").children) {        // troncs et années sur les troncs
+    if (el.tagName === "path") {
+      const cls = el.getAttribute("class") || "", k = ["orange", "jaune", "vert"].find(x => cls.split(" ").includes(x)) || "vert";
+      s += `<path d="${el.getAttribute("d")}" fill="none" stroke="${couleur(k)}" stroke-width="3"${cls.includes("ancien") ? ' stroke-dasharray="6 5"' : ""}/>`;
+    } else if (el.tagName === "rect") s += el.outerHTML;
+    else if (el.tagName === "text") s += `<text x="${el.getAttribute("x")}" y="${el.getAttribute("y")}" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="#0F2238" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round" paint-order="stroke">${echapperHtml(el.textContent)}</text>`;
+  }
+  for (const b of frise.querySelectorAll(".boite")) {           // parcelles
+    const r = rel(b.getBoundingClientRect()), ep = parseFloat(getComputedStyle(b).borderTopWidth) || 2;
+    const k = ["orange", "jaune", "vert"].find(x => b.classList.contains(x));
+    const trait = b.classList.contains("actuelle") ? "#0F2238" : k ? (travail ? couleur(k) : "#657D96") : "#D7DDE3";
+    s += `<rect x="${(r.x + ep / 2).toFixed(1)}" y="${(r.y + ep / 2).toFixed(1)}" width="${(r.w - ep).toFixed(1)}" height="${(r.h - ep).toFixed(1)}" rx="4" fill="#FFFFFF" stroke="${trait}" stroke-width="${ep}"/>`;
+    for (const n of b.querySelector(".ref").childNodes) s += ecrire(n);
+    const sf = b.querySelector(".surf"); if (sf) s += ecrire(sf);
+  }
+  s += "</svg>";
+  const img = new Image(); img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(s);
+  await img.decode();
+  const echelle = 2, cv = document.createElement("canvas"); cv.width = W * echelle; cv.height = H * echelle;
+  const g = cv.getContext("2d"); g.scale(echelle, echelle); g.drawImage(img, 0, 0);
+  return { png: cv.toDataURL("image/png"), largeur: W, hauteur: H };
+}
+// place disponible pour l'arbre, en pixels écran (96 par pouce) : au-delà de la largeur
+// d'une page portrait, l'arbre part seul sur une page en paysage (arbitrage du 12/10/2026)
+const ARBRE_PORTRAIT = { l: 640, h: 560 }, ARBRE_PAYSAGE = { l: 960, h: 420 };
+function placementArbre(a) {
+  const paysage = a.largeur > ARBRE_PORTRAIT.l, cadre = paysage ? ARBRE_PAYSAGE : ARBRE_PORTRAIT;
+  const f = Math.min(1, cadre.l / a.largeur, cadre.h / a.hauteur);
+  return { paysage, largeur: Math.round(a.largeur * f), hauteur: Math.round(a.hauteur * f) };
+}
 // plein écran de la fiche, réduction de la frise
 document.addEventListener("click", ev => {
   const b = ev.target.closest(".outils-fiche button"); if (!b) return;
@@ -1736,7 +1767,12 @@ async function genererWord(version) {
   }
   for (const g of groupes.values()) for (const l of g.sections.values()) l.sort((a, b) => +a.reference.numero - +b.reference.numero);
 
-  const corps = [];
+  // le document est découpé en sections : portrait, et une page en paysage pour un arbre trop large
+  let corps = [];
+  const sectionsDoc = [];
+  const fermerSection = () => { if (corps.length) sectionsDoc.push({ paysage: false, enfants: corps }); corps = []; };
+  const paragrapheArbre = (a, pos) => new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { after: 160 },
+    children: [new D.ImageRun({ data: Uint8Array.from(atob(a.png.split(",")[1]), ch => ch.charCodeAt(0)), transformation: { width: pos.largeur, height: pos.hauteur } })] });
   // --- page de garde
   corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Georgia", size: 56, color: NUIT })], spacing: { before: 1600, after: 400 }, alignment: D.AlignmentType.CENTER }));
   // TABLEAU DE DÉSIGNATION (05/10/2026) : à la manière d'un acte — commune, préfixe,
@@ -1787,6 +1823,7 @@ async function genererWord(version) {
   corps.push(new D.Paragraph({ children: [new D.PageBreak()] }));
 
   // --- corps : une partie par section
+  let sautFinal = null;
   for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
     corps.push(H(`Commune de ${g.nom} — section ${sec}`, D.HeadingLevel.HEADING_1));
     // plan(s) colorisé(s) PAINT en tête de partie — dans les deux versions, couleur de PAINT
@@ -1800,6 +1837,8 @@ async function genererWord(version) {
     for (const res of liste) {
       const r = res.reference;
       corps.push(H(`Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, D.HeadingLevel.HEADING_2));
+      const arbre = res.trouve ? await imageArbre(res, travail) : null, posArbre = arbre ? placementArbre(arbre) : null;
+      if (posArbre && !posArbre.paysage) corps.push(paragrapheArbre(arbre, posArbre));
       if (!res.trouve) {
         const e0 = etatTrente(res);
         if (e0.couleur === "vert") {       // mur de l'informatisation à plus de trente ans (cas a)
@@ -1851,51 +1890,45 @@ async function genererWord(version) {
       }
       corps.push(tableau(lignes, largeurs));
       corps.push(P(""));
+      if (posArbre?.paysage) {                         // arbre trop large : sa propre page en paysage
+        fermerSection();
+        sectionsDoc.push({ paysage: true, enfants: [H(`Parcelle ${r.libelle} — arbre de filiation`, D.HeadingLevel.HEADING_2), paragrapheArbre(arbre, posArbre)] });
+      }
     }
-    corps.push(new D.Paragraph({ children: [new D.PageBreak()] }));
+    if (corps.length) { sautFinal = new D.Paragraph({ children: [new D.PageBreak()] }); corps.push(sautFinal); }   // pas de saut juste après une page en paysage
   }
-  corps.pop(); // pas de saut de page final
+  if (sautFinal && corps[corps.length - 1] === sautFinal) corps.pop(); // pas de saut de page final
+  fermerSection();
 
-  // --- papier à en-tête du cabinet (modèle courrier FIDAL, charte v2.2)
+  // --- papier à en-tête du cabinet (modèle de courrier Word du cabinet, 12/10/2026)
+  // en-tête : logo centré (188 × 57 pt), filet bleu nuit de 0,75 pt d'un bord à l'autre de la page ;
+  // pied : même filet, ligne des bureaux en gras, adresse, courriel et téléphone ;
+  // puis, en petit gris, la mention DGFiP et la pagination (arbitrages HISTO)
   const GRIS = "657D96";
-  const [logoBrut, marianne] = await Promise.all([lireImageDrive(DRIVE_LOGO_FIDAL_ID), lireImageDrive(DRIVE_MARIANNE_ID)]);
-  // logo : rogné au plus près puis posé à 137 pt de large comme sur la lettre de mission,
-  // la hauteur suivant les proportions réelles de l'image (jamais imposée)
-  const LARGEUR_LOGO_PT = 137;
-  let logoFidal = null, hauteurLogo = 53;
-  if (logoBrut) {
-    const r = await rognerMarges(logoBrut);
-    logoFidal = r.octets;
-    if (r.largeur > 0) hauteurLogo = Math.round(LARGEUR_LOGO_PT * r.hauteur / r.largeur);
-  }
-  const filet = { bottom: { style: D.BorderStyle.SINGLE, size: 6, color: NUIT, space: 6 } };
-  const entete = new D.Header({ children: [new D.Paragraph({
-    children: logoFidal
-      ? [new D.ImageRun({ data: logoFidal, transformation: { width: LARGEUR_LOGO_PT, height: hauteurLogo } })]
-      : [new D.TextRun({ text: "FIDAL", font: "Georgia", size: 32, bold: true, color: NUIT }), new D.TextRun({ text: "  NOTAIRES", font: "Segoe UI", size: 22, color: NUIT })],
-    alignment: D.AlignmentType.CENTER, border: filet, spacing: { after: 120 } })] });
-  const ligne = (children, o = {}) => new D.Paragraph({ children, alignment: o.alignment ?? D.AlignmentType.CENTER, spacing: { after: 20 } });
-  const petit = (text, o = {}) => T(text, { size: 16, color: GRIS, ...o });
-  const colonneTexte = [
-    ligne([petit("3 Place de la Madeleine • 75008 PARIS • Tel : 01 44 51 01 23", { size: 18, color: NUIT })]),
-    ligne([petit("www.fidal.notaires.fr", { size: 18, color: NUIT })]),
-    ligne([petit(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`)]),
-    ligne([petit("Page "), new D.TextRun({ children: [D.PageNumber.CURRENT], font: "Segoe UI", size: 16, color: GRIS }), petit(" / "), new D.TextRun({ children: [D.PageNumber.TOTAL_PAGES], font: "Segoe UI", size: 16, color: GRIS })]),
-  ];
-  const sansBordure = { style: D.BorderStyle.NONE, size: 0, color: "FFFFFF" };
-  const bordsNuls = { top: sansBordure, bottom: sansBordure, left: sansBordure, right: sansBordure, insideHorizontal: sansBordure, insideVertical: sansBordure };
-  const pied = new D.Footer({ children: [new D.Table({
-    width: { size: 9638, type: D.WidthType.DXA }, columnWidths: marianne ? [1700, 7938] : [9638], borders: bordsNuls,
-    rows: [new D.TableRow({ children: [
-      ...(marianne ? [new D.TableCell({ width: { size: 1700, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: [new D.Paragraph({ children: [new D.ImageRun({ data: marianne, transformation: { width: 74, height: 64 } })], alignment: D.AlignmentType.CENTER })] })] : []),
-      new D.TableCell({ width: { size: marianne ? 7938 : 9638, type: D.WidthType.DXA }, verticalAlign: D.VerticalAlign.CENTER, children: colonneTexte }),
-    ] })],
-  })] });
+  const logoEntete = Uint8Array.from(atob(LOGO_ENTETE_PNG_B64), ch => ch.charCodeAt(0));
+  const pleineLargeur = { left: -1134, right: -1134 };          // les marges latérales font 1 134 : le filet va jusqu'au bord
+  // en-tête et pied fabriqués pour chaque section (portrait comme paysage)
+  const fabriquerEntete = () => new D.Header({ children: [new D.Paragraph({
+    children: [new D.ImageRun({ data: logoEntete, transformation: { width: 251, height: 76 } })],
+    alignment: D.AlignmentType.CENTER, indent: pleineLargeur,
+    border: { bottom: { style: D.BorderStyle.SINGLE, size: 6, color: NUIT, space: 14 } } })] });
+  const lignePied = (children, o = {}) => new D.Paragraph({ children, alignment: D.AlignmentType.CENTER, spacing: { after: o.apres ?? 10 },
+    ...(o.filet ? { indent: pleineLargeur, border: { top: { style: D.BorderStyle.SINGLE, size: 6, color: NUIT, space: 8 } } } : {}) });
+  const fabriquerPied = () => new D.Footer({ children: [
+    lignePied(BUREAUX_CABINET.flatMap((b, i) => [...(i ? [T(" • ", { size: 20 })] : []), T(b, { size: 20, bold: true })]), { filet: true, apres: 50 }),
+    lignePied([T(ADRESSE_CABINET, { size: 16 })]),
+    lignePied([T(COURRIEL_CABINET, { size: 16, underline: {} }), T(` - ${TELEPHONE_CABINET}`, { size: 16 })], { apres: 60 }),
+    lignePied([T(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, { size: 14, color: GRIS })]),
+    lignePied([T("Page ", { size: 14, color: GRIS }), new D.TextRun({ children: [D.PageNumber.CURRENT], font: "Segoe UI", size: 14, color: GRIS }), T(" / ", { size: 14, color: GRIS }), new D.TextRun({ children: [D.PageNumber.TOTAL_PAGES], font: "Segoe UI", size: 14, color: GRIS })], { apres: 0 }),
+  ] });
 
   const doc = new D.Document({
     creator: "FIDAL Notaires — HISTO", title: "Origine cadastrale",
     styles: { default: { document: { run: { font: "Segoe UI", size: 20, color: NUIT } } } },
-    sections: [{ properties: { page: { margin: { top: 1300, bottom: 1500, left: 1134, right: 1134, header: 450, footer: 350 } } }, headers: { default: entete }, footers: { default: pied }, children: corps }],
+    sections: sectionsDoc.map(sd => ({ properties: { page: {
+        ...(sd.paysage ? { size: { width: 11906, height: 16838, orientation: D.PageOrientation.LANDSCAPE } } : {}),
+        margin: { top: 2300, bottom: 2150, left: 1134, right: 1134, header: 520, footer: 300 } } },
+      headers: { default: fabriquerEntete() }, footers: { default: fabriquerPied() }, children: sd.enfants })),
   });
   const blob = await D.Packer.toBlob(doc);
   const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();
@@ -1951,6 +1984,9 @@ async function genererPdfClient() {
   const designation = await designationDuLot();
 
   const contenu = [];
+  // après une page en paysage, le contenu suivant repart en portrait sur une nouvelle page
+  let apresPaysage = false;
+  const suite = o => { if (apresPaysage) { o.pageBreak = "before"; o.pageOrientation = "portrait"; apresPaysage = false; } return o; };
   // --- page de garde
   contenu.push({ text: "Origine cadastrale", style: "titre", margin: [0, 110, 0, 30] });
   const filets = { hLineColor: () => BLEU_GRIS, vLineColor: () => BLEU_GRIS, hLineWidth: () => 0.5, vLineWidth: () => 0.5,
@@ -1981,13 +2017,15 @@ async function genererPdfClient() {
 
   // --- une partie par section
   for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
-    contenu.push({ text: `Commune de ${g.nom} — section ${sec}`, style: "h1", pageBreak: "before" });
+    contenu.push(suite({ text: `Commune de ${g.nom} — section ${sec}`, style: "h1", pageBreak: "before" }));
     const plan = plans.find(x => x.cle === `${liste[0].reference.dep}${liste[0].reference.com}|${sec}`);
     for (const v of (plan?.vues || [])) contenu.push({ image: v.png, fit: [481, 560], alignment: "center", margin: [0, 0, 0, 10] });
     if (plan?.sansContour?.length) contenu.push({ text: `Sans contour au plan cadastral : ${plan.sansContour.join(", ")}.`, italics: true, color: BLEU_GRIS });
     for (const res of liste) {
       const r = res.reference;
-      contenu.push({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2" });
+      contenu.push(suite({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2" }));
+      const arbre = res.trouve ? await imageArbre(res, false) : null, posArbre = arbre ? placementArbre(arbre) : null;
+      if (posArbre && !posArbre.paysage) contenu.push({ image: arbre.png, width: posArbre.largeur * 0.75, alignment: "center", margin: [0, 2, 0, 10] });
       if (!res.trouve) { contenu.push({ text: etatTrente(res).couleur === "vert" ? PHRASE_CLIENT_SANS_VARIATION : "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); continue; }
       let marqueur = false;
       for (const m of res.maillons) {
@@ -2003,28 +2041,30 @@ async function genererPdfClient() {
         corpsTab.push([String(m.document.annee ?? ""), m.document.nature_libelle, `${m.parcelles_origine.map(o => o.libelle).join(", ")} → ${m.parcelle.libelle}`]);
       }
       contenu.push({ table: { headerRows: 1, widths: [45, 170, "*"], body: corpsTab }, layout: { ...filets, fillColor: (i) => i === 0 ? CANARD : null }, margin: [0, 4, 0, 12] });
+      if (posArbre?.paysage) {                         // arbre trop large : sa propre page en paysage
+        contenu.push({ stack: [{ text: `Parcelle ${r.libelle} — arbre de filiation`, style: "h2" }, { image: arbre.png, width: posArbre.largeur * 0.75, alignment: "center" }], pageBreak: "before", pageOrientation: "landscape" });
+        apresPaysage = true;
+      }
     }
   }
 
-  // --- papier à en-tête : logo rogné au plus près, Marianne, adresse, mention DGFiP, pagination
-  const [logoBrut, marianne] = await Promise.all([lireImageDrive(DRIVE_LOGO_FIDAL_ID), lireImageDrive(DRIVE_MARIANNE_ID)]);
-  const logo = logoBrut ? await rognerMarges(logoBrut) : null;
-  const logoUrl = logo ? versDataUrl(logo.octets) : null, marianneUrl = marianne ? versDataUrl(marianne) : null;
+  // --- papier à en-tête du cabinet (12/10/2026) : même composition que le Word
+  const logoUrl = "data:image/png;base64," + LOGO_ENTETE_PNG_B64;
   const def = {
-    pageSize: "A4", pageMargins: [57, 92, 57, 96],
+    pageSize: "A4", pageMargins: [57, 120, 57, 128],
     info: { title: "Origine cadastrale", creator: "FIDAL Notaires — HISTO" },
     defaultStyle: { font: "Roboto", fontSize: 10, color: NUIT, lineHeight: 1.15 },
     styles: { titre: { fontSize: 28, alignment: "center", color: NUIT }, h1: { fontSize: 16, color: NUIT, margin: [0, 0, 0, 10] }, h2: { fontSize: 13, color: NUIT, margin: [0, 10, 0, 6] } },
-    header: () => ({ margin: [57, 28, 57, 0], stack: [
-      logoUrl ? { image: logoUrl, width: 137, alignment: "center" } : { text: "FIDAL NOTAIRES", alignment: "center", fontSize: 16, bold: true },
-      { canvas: [{ type: "line", x1: 0, y1: 6, x2: 481, y2: 6, lineWidth: 0.75, lineColor: NUIT }] } ] }),
-    footer: (page, total) => ({ margin: [57, 10, 57, 0], columns: [
-      ...(marianneUrl ? [{ image: marianneUrl, width: 52, margin: [0, 0, 10, 0] }] : []),
-      { width: "*", stack: [
-        { text: "3 Place de la Madeleine • 75008 PARIS • Tel : 01 44 51 01 23", alignment: "center", fontSize: 9 },
-        { text: "www.fidal.notaires.fr", alignment: "center", fontSize: 9 },
-        { text: `Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, alignment: "center", fontSize: 7.5, color: BLEU_GRIS, margin: [0, 2, 0, 0] },
-        { text: `Page ${page} / ${total}`, alignment: "center", fontSize: 8, color: BLEU_GRIS } ] } ] }),
+    header: (page, total, taille) => ({ margin: [0, 26, 0, 0], stack: [
+      { image: logoUrl, width: 188, alignment: "center" },
+      { canvas: [{ type: "line", x1: 0, y1: 16, x2: taille.width, y2: 16, lineWidth: 0.75, lineColor: NUIT }] } ] }),
+    footer: (page, total, taille) => ({ margin: [0, 26, 0, 0], stack: [
+      { canvas: [{ type: "line", x1: 0, y1: 0, x2: taille.width, y2: 0, lineWidth: 0.75, lineColor: NUIT }] },
+      { text: BUREAUX_CABINET.flatMap((b, i) => [...(i ? [{ text: " • " }] : []), { text: b, bold: true }]), alignment: "center", fontSize: 10, margin: [0, 9, 0, 3] },
+      { text: ADRESSE_CABINET, alignment: "center", fontSize: 8 },
+      { text: [{ text: COURRIEL_CABINET, decoration: "underline" }, ` - ${TELEPHONE_CABINET}`], alignment: "center", fontSize: 8, margin: [0, 1, 0, 5] },
+      { text: `Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, alignment: "center", fontSize: 7, color: BLEU_GRIS, margin: [57, 0, 57, 1] },
+      { text: `Page ${page} / ${total}`, alignment: "center", fontSize: 7, color: BLEU_GRIS } ] }),
     content: nettoyerPdf(contenu),
   };
   const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();

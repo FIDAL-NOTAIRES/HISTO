@@ -1161,7 +1161,7 @@ function nomCommune(ref) { const r = etat.refs.find(x => x.dep === ref.dep && x.
 function afficherResultats(j) {
   friseATracer.length = 0;
   etat.plans = null; zonePaint().classList.remove("actif");
-  etat.vignettes = new Map(); etat.detail = null;
+  etat.vignettes = new Map(); etat.plansParcelle = new Map(); etat.detail = null;
   document.querySelector("#vue-detail .detail-fiche").innerHTML = "";
   const zone = document.getElementById("reserve-fiches");
   const anneeCourante = new Date().getFullYear();
@@ -1369,17 +1369,30 @@ document.getElementById("btn-retour-liste").addEventListener("click", () => {
    rapprochées ne lancent pas deux PAINT en même temps. */
 let fileVignettes = Promise.resolve();
 const MARGE_VIGNETTE = 0.6, MARGE_VIGNETTE_MIN_PX = 80, VIGNETTE_MAX_PX = 900;
+// plan PAINT d'une parcelle seule, gardé pour la session ; les demandes passent une par une
+function planDeParcelle(res) {
+  const k = cleRef(res.reference);
+  if (!etat.plansParcelle) etat.plansParcelle = new Map();
+  if (!etat.plansParcelle.has(k)) {
+    const pr = fileVignettes.then(async () => {
+      const r = res.reference;
+      const vues = grouperEnVues(await contoursSection([r]));
+      if (!vues.length) return { sansContour: true };
+      const plan = await demanderPlan(parametresPaint(vues[0], nomCommune(r)), `parcelle ${r.libelle} de ${nomCommune(r)}`);
+      if (!plan.ok) throw new Error(plan.message || "PAINT n'a pas rendu le plan");
+      return plan;
+    });
+    fileVignettes = pr.catch(() => {});
+    etat.plansParcelle.set(k, pr);
+    pr.catch(() => etat.plansParcelle.delete(k));      // un échec n'est pas gardé : on pourra réessayer
+  }
+  return etat.plansParcelle.get(k);
+}
 function produireVignette(res) {
-  const tache = fileVignettes.then(async () => {
-    const r = res.reference;
-    const vues = grouperEnVues(await contoursSection([r]));
-    if (!vues.length) throw new Error("parcelle sans contour au plan cadastral actuel");
-    const plan = await demanderPlan(parametresPaint(vues[0], nomCommune(r)), `vignette ${r.libelle}`);
-    if (!plan.ok) throw new Error(plan.message || "PAINT n'a pas rendu le plan");
+  return planDeParcelle(res).then(plan => {
+    if (plan.sansContour) throw new Error("parcelle sans contour au plan cadastral actuel");
     return decouperVignette(plan);
   });
-  fileVignettes = tache.catch(() => {});
-  return tache;
 }
 async function decouperVignette(plan) {
   const img = new Image(); img.src = plan.png; await img.decode();
@@ -1819,37 +1832,23 @@ function demanderPlan(qs, libelle) {
 }
 
 /* --- tous les plans du lot (mis en cache sur le résultat) --- */
+// UN PLAN PAR PARCELLE (12/10/2026, JFD : « met plutôt chaque plan après chaque historique ») :
+// remplace le plan par section en tête de partie. Le plan est celui que prépare l'écran de détail
+// (planDeParcelle) : une parcelle déjà ouverte à l'écran ne redemande rien à PAINT.
 async function assurerPlans() {
-  if (!etat.resultats) return [];
+  if (!etat.resultats) return new Map();
   if (etat.plans) return etat.plans;
-  const sections = new Map();   // clé commune+section → [refs]
-  for (const res of resultatsUtiles()) {
-    const r = res.reference, k = `${r.dep}${r.com}|${r.section}`;
-    if (!sections.has(k)) sections.set(k, []);
-    sections.get(k).push(r);
-  }
-  const plans = [];   // {cle, section, communeNom, vues:[{png,...}]}
+  const liste = resultatsUtiles(), plans = new Map();
   relevePaint.length = 0; parametresEnvoyes.length = 0; afficherRelevePaint();
   let i = 0;
-  for (const [cle, refs] of sections) {
+  for (const res of liste) {
     i++;
-    const communeNom = nomCommune(refs[0]);
-    etatPaint(`Plan PAINT ${i} sur ${sections.size} — section ${refs[0].section} de ${communeNom} : contours cadastraux…`);
-    const t0 = Date.now();
-    const contours = await contoursSection(refs);
-    relevePaint.push({ vue: `section ${refs[0].section} de ${communeNom}`, texte: `contours cadastraux (${refs.length} parcelle(s), dans HISTO)`, t: t0, duree: Date.now() - t0 }); afficherRelevePaint();
-    const vues = grouperEnVues(contours);
-    const images = [];
-    for (let v = 0; v < vues.length; v++) {
-      const libelle = `section ${refs[0].section} de ${communeNom}${vues.length > 1 ? `, vue ${v + 1} sur ${vues.length}` : ""}`;
-      etatPaint(`Plan PAINT ${i} sur ${sections.size} — ${libelle} : colorisation…`);
-      const res = await demanderPlan(parametresPaint(vues[v], communeNom), libelle);
-      if (!res.ok) throw new Error(`plan de la ${libelle} non obtenu (${res.message}). Le document n'est pas généré.`);
-      images.push(res);
-    }
-    plans.push({ cle, section: refs[0].section, communeNom, vues: images, sansContour: contours.filter(c => !c.anneaux).map(c => c.ref.libelle || `${c.ref.section} ${c.ref.numero}`) });
+    const r = res.reference;
+    etatPaint(`Plan PAINT ${i} sur ${liste.length} — parcelle ${r.libelle} de ${nomCommune(r)}…`);
+    try { plans.set(cleRef(r), await planDeParcelle(res)); }
+    catch (e) { throw new Error(`plan de la parcelle ${r.libelle} non obtenu (${(e && e.message) || e}). Le document n'est pas généré.`); }
   }
-  etatPaint(`${plans.length} plan(s) PAINT obtenu(s).`);
+  etatPaint(`${plans.size} plan(s) PAINT obtenu(s).`);
   etat.plans = plans;
   return plans;
 }
@@ -1936,6 +1935,16 @@ async function genererWord(version) {
   const fermerSection = () => { if (corps.length) sectionsDoc.push({ paysage: false, enfants: corps }); corps = []; };
   const paragrapheArbre = (a, pos) => new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { after: 160 },
     children: [new D.ImageRun({ data: Uint8Array.from(atob(a.png.split(",")[1]), ch => ch.charCodeAt(0)), transformation: { width: pos.largeur, height: pos.hauteur } })] });
+  // plan de la parcelle, juste après son historique (JFD, 12/10/2026)
+  const planWord = (r) => {
+    const pl = plans.get(cleRef(r)); if (!pl) return [];
+    if (pl.sansContour) return [P(`Parcelle ${r.libelle} sans contour au plan cadastral actuel : pas de plan.`, { run: { italics: true, color: "5B6B7B" } })];
+    const f = Math.min(600 / pl.largeur, 700 / pl.hauteur);
+    return [P(`Plan cadastral de la parcelle ${r.libelle}`, { run: { italics: true, color: CANARD }, par: { keepNext: true, spacing: { before: 160, after: 60 } } }),
+      new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { after: 160 }, children: [new D.ImageRun({
+        data: Uint8Array.from(atob(pl.png.split(",")[1]), ch => ch.charCodeAt(0)),
+        transformation: { width: Math.round(pl.largeur * f), height: Math.round(pl.hauteur * f) } })] })];
+  };
   // --- page de garde
   corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Georgia", size: 56, color: NUIT })], spacing: { before: 1600, after: 400 }, alignment: D.AlignmentType.CENTER }));
   // TABLEAU DE DÉSIGNATION (05/10/2026) : à la manière d'un acte — commune, préfixe,
@@ -1991,14 +2000,6 @@ async function genererWord(version) {
   let sautFinal = null;
   for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
     corps.push(H(`Commune de ${g.nom} — section ${sec}`, D.HeadingLevel.HEADING_1));
-    // plan(s) colorisé(s) PAINT en tête de partie — dans les deux versions, couleur de PAINT
-    const plan = plans.find(x => x.cle === `${liste[0].reference.dep}${liste[0].reference.com}|${sec}`);
-    for (const v of (plan?.vues || [])) {
-      const octets = Uint8Array.from(atob(v.png.split(",")[1]), ch => ch.charCodeAt(0));
-      const largeurPt = 600, hauteurPt = Math.round(largeurPt * v.hauteur / v.largeur);
-      corps.push(new D.Paragraph({ children: [new D.ImageRun({ data: octets, transformation: { width: largeurPt, height: Math.min(hauteurPt, 760) } })], alignment: D.AlignmentType.CENTER, spacing: { after: 160 } }));
-    }
-    if (plan?.sansContour?.length) corps.push(P(`Sans contour au plan cadastral : ${plan.sansContour.join(", ")}.`, { run: { italics: true, color: "5B6B7B" } }));
     for (const res of liste) {
       const r = res.reference;
       corps.push(H(`Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, D.HeadingLevel.HEADING_2));
@@ -2010,11 +2011,13 @@ async function genererWord(version) {
           corps.push(travail
             ? P(`Aucun mouvement cadastral n'est enregistré pour cette parcelle depuis le début de l'informatisation du cadastre de la commune (${e0.mur.annee}, plus ancien document de la commune), il y a plus de trente ans : l'origine trentenaire est réputée atteinte.`)
             : P(PHRASE_CLIENT_SANS_VARIATION));
+          corps.push(...planWord(r));
           continue;
         }
         corps.push(travail
           ? encadre(`Aucun mouvement cadastral n'est enregistré pour cette parcelle dans les documents de filiation informatisés : parcelle d'origine, remembrement ou mouvement antérieur à l'informatisation. Un état hypothécaire complémentaire doit être levé pour établir l'origine de propriété.${e0.mur ? ` Données cadastrales informatisées à partir de ${e0.mur.annee} (plus ancien document de la commune).` : ""}`, JAUNE)
           : P("La filiation ne peut être retracée à partir des données cadastrales disponibles."));
+        corps.push(...planWord(r));
         continue;
       }
       // phrases rédigées, du présent vers le passé, marqueur des trente ans
@@ -2059,6 +2062,7 @@ async function genererWord(version) {
         fermerSection();
         sectionsDoc.push({ paysage: true, enfants: [H(`Parcelle ${r.libelle} — arbre de filiation`, D.HeadingLevel.HEADING_2), paragrapheArbre(arbre, posArbre)] });
       }
+      corps.push(...planWord(r));
     }
     if (corps.length) { sautFinal = new D.Paragraph({ children: [new D.PageBreak()] }); corps.push(sautFinal); }   // pas de saut juste après une page en paysage
   }
@@ -2151,6 +2155,14 @@ async function genererPdfClient() {
   // après une page en paysage, le contenu suivant repart en portrait sur une nouvelle page
   let apresPaysage = false;
   const suite = o => { if (apresPaysage) { o.pageBreak = "before"; o.pageOrientation = "portrait"; apresPaysage = false; } return o; };
+  // plan de la parcelle, juste après son historique (JFD, 12/10/2026)
+  const planPdf = (r) => {
+    const pl = plans.get(cleRef(r)); if (!pl) return;
+    if (pl.sansContour) { contenu.push(suite({ text: `Parcelle ${r.libelle} sans contour au plan cadastral actuel : pas de plan.`, italics: true, color: BLEU_GRIS, margin: [0, 4, 0, 10] })); return; }
+    contenu.push(suite({ unbreakable: true, margin: [0, 6, 0, 12], stack: [
+      { text: `Plan cadastral de la parcelle ${r.libelle}`, italics: true, color: CANARD, margin: [0, 0, 0, 4] },
+      { image: pl.png, fit: [481, 520], alignment: "center" }] }));
+  };
   // --- page de garde
   contenu.push({ text: "Origine cadastrale", style: "titre", margin: [0, 110, 0, 30] });
   const filets = { hLineColor: () => BLEU_GRIS, vLineColor: () => BLEU_GRIS, hLineWidth: () => 0.5, vLineWidth: () => 0.5,
@@ -2184,15 +2196,12 @@ async function genererPdfClient() {
   // --- une partie par section
   for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
     contenu.push(suite({ text: `Commune de ${g.nom} — section ${sec}`, style: "h1", pageBreak: "before" }));
-    const plan = plans.find(x => x.cle === `${liste[0].reference.dep}${liste[0].reference.com}|${sec}`);
-    for (const v of (plan?.vues || [])) contenu.push({ image: v.png, fit: [481, 560], alignment: "center", margin: [0, 0, 0, 10] });
-    if (plan?.sansContour?.length) contenu.push({ text: `Sans contour au plan cadastral : ${plan.sansContour.join(", ")}.`, italics: true, color: BLEU_GRIS });
     for (const res of liste) {
       const r = res.reference;
       contenu.push(suite({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2" }));
       const arbre = res.trouve ? await imageArbre(res, false) : null, posArbre = arbre ? placementArbre(arbre) : null;
       if (posArbre && !posArbre.paysage) contenu.push({ image: arbre.png, width: posArbre.largeur * 0.75, alignment: "center", margin: [0, 2, 0, 10] });
-      if (!res.trouve) { contenu.push({ text: etatTrente(res).couleur === "vert" ? PHRASE_CLIENT_SANS_VARIATION : "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); continue; }
+      if (!res.trouve) { contenu.push({ text: etatTrente(res).couleur === "vert" ? PHRASE_CLIENT_SANS_VARIATION : "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); planPdf(r); continue; }
       let marqueur = false;
       for (const m of res.maillons) {
         if (!marqueur && m.document.au_dela_30_ans) { contenu.push({ text: "— au-delà de trente ans —", italics: true, color: CANARD, alignment: "center", margin: [0, 2, 0, 6] }); marqueur = true; }
@@ -2211,6 +2220,7 @@ async function genererPdfClient() {
         contenu.push({ stack: [{ text: `Parcelle ${r.libelle} — arbre de filiation`, style: "h2" }, { image: arbre.png, width: posArbre.largeur * 0.75, alignment: "center" }], pageBreak: "before", pageOrientation: "landscape" });
         apresPaysage = true;
       }
+      planPdf(r);
     }
   }
 

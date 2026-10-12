@@ -15,6 +15,14 @@
 //     ou « aucun-mouvement-depuis-informatisation » pour une parcelle sans mouvement) ;
 //   - début il y a trente ans OU MOINS → arrêt maintenu, l'année est transmise.
 //   Année retenue : celle du plus ancien document de la commune dans le DFI.
+// Contrat 1.2 (12/10/2026) — champ « besoins » : ce que HISTO a repéré comme pièce à obtenir.
+//   HISTO SIGNALE, l'appelant PILOTE la formalité (MATRICE, état hypothécaire) :
+//   - « document-arpentage » : un par branche arrêtée AVANT trente ans, sur le document qui
+//     l'arrête (identifiant, lot, date), pour reconstituer ce qui précède ;
+//   - « etat-hypothecaire » : dès que la filiation n'est pas trentenaire (arrêt avant trente
+//     ans, ou aucun mouvement hors règle de l'informatisation).
+//   L'ÉCART DE SURFACE n'y figure pas : le DFI ne porte aucune contenance, le contrôle reste
+//   à l'appelant, qui dispose des contenances anciennes par les titres.
 //
 // Le moteur tourne ICI, côté serveur : le navigateur de l'appelant n'envoie
 // qu'une demande et ne reçoit qu'un résultat (premier pas de la sécurisation).
@@ -37,7 +45,7 @@
 //                    elle REMPLACE la liste par défaut — y remettre les trois)
 // ============================================================
 
-const VERSION_CONTRAT = "1.1";
+const VERSION_CONTRAT = "1.2";
 const PREFIXE_FICHIER = "HISTO_";
 const SEUIL_30_ANS = 30;
 const PROFONDEUR_MAX = 60;            // garde-fou contre les boucles
@@ -298,6 +306,25 @@ async function filiation(entree, jeton) {
   const motif = introuvable ? "introuvable"
               : !trouve ? (idx === null ? "commune-non-chargee" : sansMouvementCouvert ? "aucun-mouvement-depuis-informatisation" : "aucun-mouvement")
               : trentenaire ? (cv.parMur ? "trentenaire-informatisation" : "trentenaire") : "arret-avant-30-ans";
+  // ---- besoins (contrat 1.2) ----
+  const besoins = [];
+  if(!introuvable && idx && !trentenaire)
+    besoins.push({ type: "etat-hypothecaire", motif: trouve ? "arret-avant-30-ans" : "aucun-mouvement" });
+  const vusDocs = new Set();
+  for(const a of cv.arrets){
+    const k = cleRef(a.parcelle);
+    // le document qui a fait disparaître le bout de branche ; s'il y en a plusieurs, le plus récent
+    const m = maillons.filter((x) => x._meres.some((o) => cleRef(o) === k))
+      .sort((x, y) => (y.document.annee ?? 0) - (x.document.annee ?? 0))[0];
+    if(!m) continue;
+    const cleDoc = m.document.id_dfi + "|" + (m.document.lot ?? "");
+    if(vusDocs.has(cleDoc)) continue;
+    vusDocs.add(cleDoc);
+    besoins.push({ type: "document-arpentage", motif: "arret-avant-30-ans",
+      parcelle: parcelle(a.parcelle), parcelle_issue: m.parcelle,
+      document: { id_dfi: m.document.id_dfi, lot: m.document.lot, code_nature: m.document.code_nature,
+                  libelle_nature: m.document.libelle_nature, date_effet: m.document.date_effet, annee: m.document.annee } });
+  }
   const plusAncien = maillons.reduce((min, m) => m.document.annee != null && (min == null || m.document.annee < min) ? m.document.annee : min, null);
 
   return {
@@ -311,6 +338,7 @@ async function filiation(entree, jeton) {
     plus_ancien_mouvement: plusAncien,
     informatisation: mur ? { annee_debut: mur.annee, plus_de_30_ans: mur.ancien, source: "plus ancien document de la commune dans le DFI" } : null,
     arrets: cv.arrets.map(a => ({ parcelle: parcelle(a.parcelle), annee_disparition: a.annee })),
+    besoins,
     nombre_maillons: maillons.length,
     arbre: maillons.map(({ _cle, _meres, ...m }, i) => ({ rang: i + 1, ...m })),
   };

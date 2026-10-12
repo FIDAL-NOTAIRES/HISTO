@@ -90,6 +90,7 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 .pastille.vert{background:var(--vert)}.pastille.jaune{background:var(--jaune-texte)}.pastille.orange{background:var(--orange)}
 .rien{padding:12px 14px;background:#FFF9E0;border-left:4px solid var(--jaune-texte);border-radius:3px}
 .rien.carmin{background:#FBE9EE;border-left-color:var(--carmin)}
+.rien.vert{background:#E6F3EC;border-left-color:var(--vert)}
 /* bandeau d'état de la filiation (05/10/2026) : même code couleur que le Word */
 .bandeau-trente{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:4px;margin:0 0 14px;font-size:.95rem;color:var(--nuit)}
 .bandeau-trente.vert{background:#E6F3EC;border-left:5px solid var(--vert)}
@@ -113,8 +114,18 @@ table.refs tr.ecartee td{color:#9AA5B0;text-decoration:line-through}
 /* fonds de période : une teinte claire différente par époque, distincte des couleurs de fiabilité */
 .frise .colonne.p0{background:#EEF4F8}.frise .colonne.p1{background:#F3EFF7}.frise .colonne.p2{background:#EDF6F0}.frise .colonne.p3{background:#F8F1EA}
 .frise .colonne.ancien{box-shadow:inset 0 3px 0 0 var(--nuit)}
-.frise .epoque{position:absolute;top:8px;left:0;right:0;text-align:center;font-family:Georgia,serif;font-size:.85rem;color:var(--nuit)}
+.frise .epoque{position:absolute;top:8px;left:0;right:0;z-index:3;text-align:center;font-family:Georgia,serif;font-size:.85rem;color:var(--nuit)}
 .frise .epoque small{display:block;font-family:"Segoe UI",system-ui,sans-serif;font-size:.7rem;color:#5B6B7B}
+/* EN-TÊTE DE COLONNE DÉPLIABLE (12/10/2026, JFD) : l'année seule par défaut ; le « + »
+   déplie les références des documents de l'année (nature, identifiant, lot, date). */
+.frise .epoque .deplier{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-left:7px;padding:0;vertical-align:1px;
+  border:1px solid var(--canard);border-radius:50%;background:#fff;color:var(--canard);font:600 .85rem/1 "Segoe UI",system-ui,sans-serif}
+.frise .epoque .deplier:hover,.frise .epoque .deplier[aria-expanded="true"]{background:var(--canard);color:#fff}
+.frise .epoque .refs-doc{margin:6px 10px 0;text-align:left;font-family:"Segoe UI",system-ui,sans-serif;font-size:.74rem;line-height:1.35;color:var(--texte);
+  background:#fff;border:1px solid var(--trait);border-left:3px solid var(--canard);border-radius:3px;padding:5px 8px}
+.frise .epoque .refs-doc[hidden]{display:none}
+.frise .epoque .refs-doc div+div{border-top:1px dotted var(--trait);margin-top:4px;padding-top:4px}
+.frise .epoque .refs-doc small{display:inline;font-size:.7rem}
 .boite{position:relative;z-index:2;background:#fff;border:2px solid var(--trait);border-radius:4px;padding:6px 12px;min-width:120px}
 .boite .ref{font-family:Georgia,serif;color:var(--nuit);font-size:1.05rem;white-space:nowrap}
 .boite .ref small{font-family:"Segoe UI",system-ui,sans-serif;font-size:.78rem;color:#5B6B7B;margin-right:5px}
@@ -866,6 +877,10 @@ async function construireIndex(dep, com) {
   const noterPrefixe = (r, role) => { const k = `${r.section}-${r.numero}`;
     if (!sansPrefixe.has(k)) sansPrefixe.set(k, new Map());
     const m = sansPrefixe.get(k); m.set(r.prefixe, (m.get(r.prefixe) || new Set()).add(role)); };
+  // DÉBUT DE L'INFORMATISATION (12/10/2026) : faute de table officielle par département,
+  // on retient l'année du PLUS ANCIEN DOCUMENT de la commune dans le DFI (choix JFD).
+  let debut = null;
+  for (const doc of fichier.docs) { const a = doc.date ? +String(doc.date).slice(0, 4) : null; if (a && (debut == null || a < debut)) debut = a; }
   for (const doc of fichier.docs) for (const lot of doc.lots) {
     for (const c of lot.f) {
       const r = cellule(c, dep, com, lot.pre), kk = cleRef(r);
@@ -878,7 +893,7 @@ async function construireIndex(dep, com) {
       parMere.get(kk).push({ doc, lot }); noterPrefixe(r, "mère");
     }
   }
-  return { parFille, parMere, sansPrefixe, situation: fichier.situation };
+  return { parFille, parMere, sansPrefixe, situation: fichier.situation, debut };
 }
 
 function ecartSurfaces(meres, filles) {
@@ -945,8 +960,16 @@ async function filiation(refBrute) {
       : "Aucune filiation trouvée dans le DFI pour cette référence (remembrement, mouvement antérieur à l'informatisation, ou parcelle d'origine). Recherches à poursuivre via l'état hypothécaire."),
     plus_ancien_mouvement: plusAncien,
     alerte: trouve ? (alerteJaune ? "jaune" : "vert") : "jaune", maillons,
+    debut_informatisation: idx?.debut ?? null,
   };
-  resultat.franchit_30_ans = couverture(resultat).trentenaire;   // règle branche par branche
+  const cv = couverture(resultat);
+  resultat.franchit_30_ans = cv.trentenaire;   // règle branche par branche, mur de l'informatisation compris
+  // parcelle sans aucun mouvement : le message suit la règle de l'informatisation
+  if (!trouve && cv.mur && ["plan", "disparue"].includes(existence.code)) {
+    resultat.message = cv.trentenaire
+      ? `${existence.code === "plan" ? "Parcelle trouvée au plan cadastral actuel" : "Parcelle disparue du plan actuel"} ; aucun mouvement ne l'a créée depuis le début de l'informatisation du cadastre de la commune (${cv.mur.annee}), il y a plus de trente ans : origine trentenaire réputée atteinte.`
+      : `${resultat.message} Données cadastrales informatisées à partir de ${cv.mur.annee}.`;
+  }
   return resultat;
 }
 
@@ -1075,39 +1098,61 @@ function couverture(res) {
     }
   }
   const bouts = [...parcelles.keys()].filter(k => !nees.has(k)).map(k => ({ parcelle: parcelles.get(k), annee: disparue.get(k) }));
-  const arrets = bouts.filter(b => b.annee == null || an - b.annee <= SEUIL_30_ANS)
+  const arretsBruts = bouts.filter(b => b.annee == null || an - b.annee <= SEUIL_30_ANS)
                       .sort((a, b) => (b.annee ?? 9999) - (a.annee ?? 9999));
-  return { bouts, arrets, disparue, trentenaire: res.trouve && arrets.length === 0 };
+  /* MUR DE L'INFORMATISATION (règle confirmée par JFD le 12/10/2026, vocale).
+     Un bout de branche n'a pas de naissance connue : le DFI ne remonte pas avant le
+     début de l'informatisation du cadastre ; la parcelle est donc née AVANT ce début.
+     (a) début il y a PLUS de trente ans → la parcelle existait déjà il y a trente ans :
+         branche couverte, filiation réputée PARFAITE (comme le remembrement) ;
+         vaut aussi pour une parcelle sans aucun mouvement (au plan actuel, ou disparue) ;
+     (b) début il y a trente ans OU MOINS → pas parfaite : arrêt maintenu, et l'année du
+         début est affichée (« données cadastrales informatisées à partir de … »).
+     Année retenue : celle du plus ancien document de la commune (voir construireIndex). */
+  const mur = res.debut_informatisation != null ? { annee: res.debut_informatisation, ancien: an - res.debut_informatisation > SEUIL_30_ANS } : null;
+  const arrets = mur?.ancien ? [] : arretsBruts;
+  const sansMouvementCouvert = !res.trouve && !!mur?.ancien && ["plan", "disparue"].includes(res.existence?.code);
+  return { bouts, arrets, arretsBruts, mur, parMur: !!mur?.ancien && arretsBruts.length > 0, disparue,
+           trentenaire: (res.trouve && arrets.length === 0) || sansMouvementCouvert };
 }
+const phraseMurRecent = mur => mur && !mur.ancien ? `Données cadastrales informatisées à partir de ${mur.annee}.` : "";
 function phraseArret(et, travail) {
   const a = et.arrets || [];
+  // version de travail : l'année du début de l'informatisation est dite quand elle explique l'arrêt (cas b)
+  const mur = travail && et.mur && !et.mur.ancien ? ` Données cadastrales informatisées à partir de ${et.mur.annee} (plus ancien document de la commune).` : "";
   if (a.length <= 1) {
     const an = a[0]?.annee ?? et.dernier?.document.annee;
-    return travail ? `La filiation s'arrête en ${an ?? "date inconnue"}${a[0] ? ` (${a[0].parcelle.libelle})` : ""}, en deçà des trente ans : un état hypothécaire complémentaire doit être levé.`
+    return travail ? `La filiation s'arrête en ${an ?? "date inconnue"}${a[0] ? ` (${a[0].parcelle.libelle})` : ""}, en deçà des trente ans : un état hypothécaire complémentaire doit être levé.${mur}`
                    : `La filiation ne peut être retracée au-delà de ${an ?? "cette date"} à partir des données cadastrales.`;
   }
   const liste = a.map(x => `${x.annee ?? "date inconnue"} pour ${x.parcelle.libelle}`).join(", ");
-  return travail ? `La filiation s'arrête en deçà des trente ans sur plusieurs branches — ${liste} : un état hypothécaire complémentaire doit être levé.`
+  return travail ? `La filiation s'arrête en deçà des trente ans sur plusieurs branches — ${liste} : un état hypothécaire complémentaire doit être levé.${mur}`
                  : `La filiation ne peut être retracée au-delà de ${liste}, à partir des données cadastrales.`;
 }
 function etatTrente(res) {
   if (res.existence?.code === "introuvable") return { couleur: "carmin", motif: "introuvable", texte: "Référence introuvable — ni au plan cadastral actuel ni dans le DFI : vérifiez la référence" };
   if (res.existence?.code === "autre-prefixe") return { couleur: "carmin", motif: "introuvable", texte: `Référence introuvable sous ce préfixe — connue du DFI sous le préfixe ${res.existence.autresPrefixes.map(a => a.prefixe).join(" ou ")}` };
-  if (!res.trouve && res.existence?.code === "plan") return { couleur: "jaune", motif: "absente", texte: "Parcelle trouvée au plan actuel, aucun mouvement dans le DFI — état hypothécaire complémentaire à lever" };
-  if (!res.trouve) return { couleur: "jaune", motif: "absente", texte: "Aucune filiation dans le DFI — état hypothécaire complémentaire à lever" };
+  const cv = couverture(res), mur = cv.mur;
+  const noteMurAncien = mur ? `Informatisation du cadastre de la commune en ${mur.annee}, il y a plus de trente ans : filiation réputée parfaite.` : "";
+  if (!res.trouve) {
+    if (cv.trentenaire) return { couleur: "vert", motif: "mur-ancien", mur, texte: "Origine trentenaire atteinte", note: `Aucun mouvement depuis le début de l'informatisation. ${noteMurAncien}` };
+    const note = phraseMurRecent(mur);
+    if (res.existence?.code === "plan") return { couleur: "jaune", motif: "absente", mur, note, texte: "Parcelle trouvée au plan actuel, aucun mouvement dans le DFI — état hypothécaire complémentaire à lever" };
+    return { couleur: "jaune", motif: "absente", mur, note, texte: "Aucune filiation dans le DFI — état hypothécaire complémentaire à lever" };
+  }
   const dernier = res.maillons[res.maillons.length - 1];
-  const cv = couverture(res);
-  if (cv.trentenaire) return { couleur: "vert", motif: "trente", dernier, texte: "Origine trentenaire atteinte sur toutes les branches" };
+  if (cv.trentenaire) return { couleur: "vert", motif: "trente", dernier, mur, texte: "Origine trentenaire atteinte sur toutes les branches",
+    note: cv.parMur ? `Branche${cv.arretsBruts.length > 1 ? "s" : ""} arrêtée${cv.arretsBruts.length > 1 ? "s" : ""} au début de l'informatisation. ${noteMurAncien}` : "" };
   const libArret = a => `${a.parcelle.libelle} (${a.annee ?? "date inconnue"})`;
   const une = cv.arrets.length === 1 && cv.bouts.length === 1;
-  return { couleur: "jaune", motif: "avant30", dernier, arrets: cv.arrets,
+  return { couleur: "jaune", motif: "avant30", dernier, arrets: cv.arrets, mur, note: phraseMurRecent(mur),
     texte: une ? `Filiation arrêtée en ${cv.arrets[0].annee ?? "date inconnue"}, état hypothécaire complémentaire à lever`
                : `Filiation arrêtée avant trente ans sur ${cv.arrets.map(libArret).join(", ")} — état hypothécaire complémentaire à lever` };
 }
 function majBandeau(res) {
   const k = cleRef(res.reference), e = etatTrente(res);
   const b = document.querySelector(`.bandeau-trente[data-k="${k}"]`);
-  const note = noteDisparition(res);
+  const note = [e.note, noteDisparition(res)].filter(Boolean).join(" ");
   if (b) { b.className = `bandeau-trente ${e.couleur}`; b.innerHTML = `<span class="pastille ${e.couleur}"></span><span><b>${e.texte}</b>${note ? `<small>${note}</small>` : ""}</span>`; }
   const pa = document.querySelector(`.pastille-tete[data-k="${k}"]`);
   if (pa) pa.className = `pastille pastille-tete ${e.couleur}`;
@@ -1140,7 +1185,7 @@ function afficherResultats(j) {
       </div>`;
     html += `<div class="bandeau-trente" data-k="${cleRef(ref)}"></div>`;
     if (!res.trouve) {
-      html += `<p class="rien${estIntrouvable(res) ? " carmin" : ""}">${res.message}</p></article>`;
+      html += `<p class="rien${estIntrouvable(res) ? " carmin" : res.franchit_30_ans ? " vert" : ""}">${res.message}</p></article>`;
       return html;
     }
     // numérotation incrémentale des mouvements, partagée par l'arbre et le tableau
@@ -1153,6 +1198,24 @@ function afficherResultats(j) {
       .concat(annees.map(a => ({ cle: String(a), titre: a === "?" ? "date inconnue" : String(a), sous: "", noeuds: new Map(),
                                  ancien: a !== "?" && (anneeCourante - a) > SEUIL_30_ANS })));
     const colParCle = new Map(colonnes.map(c => [c.cle, c]));
+    // DOCUMENTS DE CHAQUE ANNÉE (12/10/2026) : une colonne de la frise regroupe tous les
+    // documents de son année ; leurs références (nature, identifiant, lot, date
+    // d'application) se déplient sous l'année par le « + » de l'en-tête.
+    const docsParAnnee = new Map();
+    for (const m of res.maillons) {
+      const cle = String(m.document.annee ?? "?"), d = m.document;
+      if (!docsParAnnee.has(cle)) docsParAnnee.set(cle, new Map());
+      docsParAnnee.get(cle).set(`${d.id_dfi}|${d.lot ?? ""}`, d);
+    }
+    function enteteColonne(c) {
+      const docs = [...(docsParAnnee.get(c.cle)?.values() || [])]
+        .sort((a, b) => String(a.date_effet ?? "").localeCompare(String(b.date_effet ?? "")) || String(a.id_dfi).localeCompare(String(b.id_dfi)));
+      const sousTitre = c.ancien ? "<small>au-delà de trente ans</small>" : "";
+      if (!docs.length) return `<div class="epoque">${c.titre}${sousTitre}</div>`;
+      const nb = docs.length > 1 ? `${docs.length} documents` : "le document";
+      const liste = docs.map(d => `<div><b>${echapperHtml(d.nature_libelle)}</b><br>n° ${echapperHtml(d.id_dfi)}${d.lot != null && d.lot !== "" ? `, lot ${echapperHtml(d.lot)}` : ""}${d.date_effet ? `<br><small>appliqué le ${new Date(d.date_effet).toLocaleDateString("fr-FR")}</small>` : ""}</div>`).join("");
+      return `<div class="epoque">${c.titre}<button type="button" class="deplier" aria-expanded="false" title="Voir les références de ${nb} de ${c.titre}" aria-label="Voir les références de ${nb} de ${c.titre}">+</button>${sousTitre}<div class="refs-doc" hidden>${liste}</div></div>`;
+    }
     const gravite = { vert: 0, jaune: 1, orange: 2 }, couleurs = ["vert", "jaune", "orange"];
     const noeuds = new Map();   // clé parcelle → {parcelle, colonne, couleur}
     function poser(p, cle, couleur) {
@@ -1197,8 +1260,8 @@ function afficherResultats(j) {
     }
     const idFrise = `frise-${res.reference.dep}${res.reference.com}-${res.reference.section}${res.reference.numero}`.replace(/\W/g, "");
     html += `<div class="frise" id="${idFrise}"><div class="colonnes">${colonnes.filter(c => c.noeuds.size).map((c, i) =>
-      `<div class="colonne p${i % 4}${c.ancien ? " ancien" : ""}"><div class="epoque">${c.titre}${c.ancien ? "<small>au-delà de trente ans</small>" : ""}</div>${[...c.noeuds.values()].map(boite).join("")}</div>`).join("")}</div><svg></svg></div>
-      <p class="legende-arbre">Trait : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:var(--orange)"></i>contradiction avec un acte <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 6px,#fff 6px 11px)"></i>au-delà de trente ans · un tronc par document, l'année sur le tronc</p>`;
+      `<div class="colonne p${i % 4}${c.ancien ? " ancien" : ""}">${enteteColonne(c)}${[...c.noeuds.values()].map(boite).join("")}</div>`).join("")}</div><svg></svg></div>
+      <p class="legende-arbre">Trait : <i style="background:var(--vert)"></i>filiation établie <i style="background:var(--jaune-texte)"></i>écart de surface, à examiner <i style="background:var(--orange)"></i>contradiction avec un acte <i style="background:repeating-linear-gradient(90deg,var(--nuit) 0 6px,#fff 6px 11px)"></i>au-delà de trente ans · un tronc par document, l'année sur le tronc · « + » sous l'année : références des documents</p>`;
     friseATracer.push({ id: idFrise, traits });
 
     // ---- étage 2 : le tableau, une ligne par mouvement ----
@@ -1235,6 +1298,27 @@ function afficherResultats(j) {
   tracerFrises();
   document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+/* EN-TÊTES DÉPLIÉS (12/10/2026) : la liste des références s'ouvre sous l'année et
+   pousse les boîtes vers le bas. Toutes les colonnes d'une même frise reçoivent la
+   même marge haute (celle de l'en-tête le plus haut), sans quoi les boîtes se
+   décaleraient d'une colonne à l'autre et les troncs ne seraient plus horizontaux. */
+const MARGE_HAUTE_COLONNE_PX = 56;
+function alignerEntetes(frise) {
+  const cols = [...frise.querySelectorAll(".colonne")];
+  const h = Math.max(0, ...cols.map(c => c.querySelector(".epoque")?.offsetHeight || 0));
+  const haut = Math.max(MARGE_HAUTE_COLONNE_PX, 8 + h + 14);
+  cols.forEach(c => { c.style.paddingTop = haut + "px"; });
+}
+document.addEventListener("click", ev => {
+  const b = ev.target.closest(".frise .deplier"); if (!b) return;
+  const ouvert = b.getAttribute("aria-expanded") !== "true";
+  b.setAttribute("aria-expanded", String(ouvert));
+  b.textContent = ouvert ? "−" : "+";
+  b.closest(".epoque").querySelector(".refs-doc").hidden = !ouvert;
+  alignerEntetes(b.closest(".frise"));
+  tracerFrises();
+});
 
 // PLACEMENT VERTICAL DES BOÎTES (05/10/2026, JFD : « ne pas hésiter à augmenter la
 // hauteur du cadre quand c'est nécessaire »). Les boîtes n'étaient qu'empilées en
@@ -1713,8 +1797,15 @@ async function genererWord(version) {
       const r = res.reference;
       corps.push(H(`Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, D.HeadingLevel.HEADING_2));
       if (!res.trouve) {
+        const e0 = etatTrente(res);
+        if (e0.couleur === "vert") {       // mur de l'informatisation à plus de trente ans (cas a)
+          corps.push(travail
+            ? P(`Aucun mouvement cadastral n'est enregistré pour cette parcelle depuis le début de l'informatisation du cadastre de la commune (${e0.mur.annee}, plus ancien document de la commune), il y a plus de trente ans : l'origine trentenaire est réputée atteinte.`)
+            : P("Aucun mouvement cadastral n'est enregistré pour cette parcelle depuis plus de trente ans."));
+          continue;
+        }
         corps.push(travail
-          ? encadre("Aucun mouvement cadastral n'est enregistré pour cette parcelle dans les documents de filiation informatisés : parcelle d'origine, remembrement ou mouvement antérieur à l'informatisation. Un état hypothécaire complémentaire doit être levé pour établir l'origine de propriété.", JAUNE)
+          ? encadre(`Aucun mouvement cadastral n'est enregistré pour cette parcelle dans les documents de filiation informatisés : parcelle d'origine, remembrement ou mouvement antérieur à l'informatisation. Un état hypothécaire complémentaire doit être levé pour établir l'origine de propriété.${e0.mur ? ` Données cadastrales informatisées à partir de ${e0.mur.annee} (plus ancien document de la commune).` : ""}`, JAUNE)
           : P("La filiation ne peut être retracée à partir des données cadastrales disponibles."));
         continue;
       }
@@ -1732,6 +1823,9 @@ async function genererWord(version) {
         corps.push(travail
           ? encadre(phraseArret(et, true), JAUNE)
           : P(phraseArret(et, false)));
+      } else if (travail && et.motif === "trente" && et.note) {
+        // vert obtenu grâce au mur de l'informatisation (cas a) : la raison est dite en version de travail
+        corps.push(P(et.note, { run: { italics: true, color: CANARD } }));
       }
       // tableau des origines
       res.maillons.forEach((m, i) => { m.num = i + 1; });
@@ -1890,7 +1984,7 @@ async function genererPdfClient() {
     for (const res of liste) {
       const r = res.reference;
       contenu.push({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2" });
-      if (!res.trouve) { contenu.push({ text: "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); continue; }
+      if (!res.trouve) { contenu.push({ text: etatTrente(res).couleur === "vert" ? "Aucun mouvement cadastral n'est enregistré pour cette parcelle depuis plus de trente ans." : "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); continue; }
       let marqueur = false;
       for (const m of res.maillons) {
         if (!marqueur && m.document.au_dela_30_ans) { contenu.push({ text: "— au-delà de trente ans —", italics: true, color: CANARD, alignment: "center", margin: [0, 2, 0, 6] }); marqueur = true; }

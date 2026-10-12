@@ -1707,6 +1707,8 @@ document.getElementById("btn-word-client").addEventListener("click", () => gener
 
 const MOIS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
 function dateLongue(iso) { const d = new Date(iso); return `${d.getDate()} ${MOIS[d.getMonth()]} ${d.getFullYear()}`; }
+// mention du pied de page (12/10/2026) : « à jour au juillet 2026 » ne se dit pas avec un mois
+const miseAJourDfi = sit => sit ? `données à jour en ${situationLongue(sit)}` : "date de mise à jour des données inconnue";
 function situationLongue(sit) { const [a, m] = String(sit || "").split("-"); return m ? `${MOIS[+m - 1]} ${a}` : (sit || "date inconnue"); }
 // Phrase rédigée d'un maillon — même formulation dans les deux versions
 function phraseMaillon(m) {
@@ -1918,7 +1920,7 @@ async function genererWord(version) {
     lignePied(BUREAUX_CABINET.flatMap((b, i) => [...(i ? [T(" • ", { size: 20 })] : []), T(b, { size: 20, bold: true })]), { filet: true, apres: 50 }),
     lignePied([T(ADRESSE_CABINET, { size: 16 })]),
     lignePied([T(COURRIEL_CABINET, { size: 16, underline: {} }), T(` - ${TELEPHONE_CABINET}`, { size: 16 })], { apres: 60 }),
-    lignePied([T(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, { size: 14, color: GRIS })]),
+    lignePied([T(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, ${miseAJourDfi(sit)}.`, { size: 14, color: GRIS })]),
     lignePied([T("Page ", { size: 14, color: GRIS }), new D.TextRun({ children: [D.PageNumber.CURRENT], font: "Segoe UI", size: 14, color: GRIS }), T(" / ", { size: 14, color: GRIS }), new D.TextRun({ children: [D.PageNumber.TOTAL_PAGES], font: "Segoe UI", size: 14, color: GRIS })], { apres: 0 }),
   ] });
 
@@ -2063,7 +2065,7 @@ async function genererPdfClient() {
       { text: BUREAUX_CABINET.flatMap((b, i) => [...(i ? [{ text: " • " }] : []), { text: b, bold: true }]), alignment: "center", fontSize: 10, margin: [0, 9, 0, 3] },
       { text: ADRESSE_CABINET, alignment: "center", fontSize: 8 },
       { text: [{ text: COURRIEL_CABINET, decoration: "underline" }, ` - ${TELEPHONE_CABINET}`], alignment: "center", fontSize: 8, margin: [0, 1, 0, 5] },
-      { text: `Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, données à jour au ${situationLongue(sit)}.`, alignment: "center", fontSize: 7, color: BLEU_GRIS, margin: [57, 0, 57, 1] },
+      { text: `Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, ${miseAJourDfi(sit)}.`, alignment: "center", fontSize: 7, color: BLEU_GRIS, margin: [57, 0, 57, 1] },
       { text: `Page ${page} / ${total}`, alignment: "center", fontSize: 7, color: BLEU_GRIS } ] }),
     content: nettoyerPdf(contenu),
   };

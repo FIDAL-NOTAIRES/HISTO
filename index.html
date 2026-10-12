@@ -363,7 +363,9 @@ const cacheFichiers = new Map();
    sont lus sur le Drive au moment de la génération, avec le jeton déjà obtenu —
    mêmes fichiers que le modèle de courrier du cabinet (mémoire FIDAL colors).
    Si une image manque, le document se fait sans elle (en-tête texte de repli). */
-const DRIVE_LOGO_FIDAL_ID = "1rmqrW3gFw9_S7rHzCeuVO1rhkbMPznXv";   // 432 × 164 px
+// 12/10/2026 (JFD) : nouveau logo « logo 2.png » du dossier « papier en tete » (1790 × 545 px),
+// à la place de « 20260524 Logo FIDAL NOTAIRES.png » (1rmqrW3gFw9_S7rHzCeuVO1rhkbMPznXv, 432 × 164 px)
+const DRIVE_LOGO_FIDAL_ID = "1eWS3OKIQtDqWdkDQjaij9rU4RhIArsHU";
 const DRIVE_MARIANNE_ID   = "1cl1BtO48H4DYbZWw3aqkMQMqz5XGBfTM";   // 471 × 407 px
 const cacheImages = new Map();
 async function lireImageDrive(id) {                 // Uint8Array, ou null si illisible

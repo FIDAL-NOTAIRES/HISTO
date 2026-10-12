@@ -1115,6 +1115,8 @@ function couverture(res) {
   return { bouts, arrets, arretsBruts, mur, parMur: !!mur?.ancien && arretsBruts.length > 0, disparue,
            trentenaire: (res.trouve && arrets.length === 0) || sansMouvementCouvert };
 }
+// version client, parcelle sans mouvement couverte par le mur (formulation JFD du 12/10/2026)
+const PHRASE_CLIENT_SANS_VARIATION = "Les références cadastrales de cette parcelle n'ont pas varié ces trente dernières années.";
 const phraseMurRecent = mur => mur && !mur.ancien ? `Données cadastrales informatisées à partir de ${mur.annee}.` : "";
 function phraseArret(et, travail) {
   const a = et.arrets || [];
@@ -1801,7 +1803,7 @@ async function genererWord(version) {
         if (e0.couleur === "vert") {       // mur de l'informatisation à plus de trente ans (cas a)
           corps.push(travail
             ? P(`Aucun mouvement cadastral n'est enregistré pour cette parcelle depuis le début de l'informatisation du cadastre de la commune (${e0.mur.annee}, plus ancien document de la commune), il y a plus de trente ans : l'origine trentenaire est réputée atteinte.`)
-            : P("Aucun mouvement cadastral n'est enregistré pour cette parcelle depuis plus de trente ans."));
+            : P(PHRASE_CLIENT_SANS_VARIATION));
           continue;
         }
         corps.push(travail
@@ -1984,7 +1986,7 @@ async function genererPdfClient() {
     for (const res of liste) {
       const r = res.reference;
       contenu.push({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2" });
-      if (!res.trouve) { contenu.push({ text: etatTrente(res).couleur === "vert" ? "Aucun mouvement cadastral n'est enregistré pour cette parcelle depuis plus de trente ans." : "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); continue; }
+      if (!res.trouve) { contenu.push({ text: etatTrente(res).couleur === "vert" ? PHRASE_CLIENT_SANS_VARIATION : "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); continue; }
       let marqueur = false;
       for (const m of res.maillons) {
         if (!marqueur && m.document.au_dela_30_ans) { contenu.push({ text: "— au-delà de trente ans —", italics: true, color: CANARD, alignment: "center", margin: [0, 2, 0, 6] }); marqueur = true; }

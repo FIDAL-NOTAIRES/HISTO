@@ -1815,6 +1815,8 @@ async function genererWord(version) {
     T(introuvables.map(r => `${nomCommune(r.reference)} ${r.reference.libelle}`).join(", ") + ".", { color: "A01040", size: 18 }) ] }));
   corps.push(new D.Paragraph({ children: [T([dossier ? `Dossier ${dossier}` : "", client].filter(Boolean).join(" — "), { size: 24 })], alignment: D.AlignmentType.CENTER, spacing: { before: 400, after: 120 } }));
   corps.push(new D.Paragraph({ children: [T(`Établi le ${dateLongue(new Date().toISOString())}`)], alignment: D.AlignmentType.CENTER }));
+  // mention de source DGFiP : UNE SEULE FOIS, sous la date, et non plus en pied de chaque page (JFD, 12/10/2026)
+  corps.push(new D.Paragraph({ children: [T(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, ${miseAJourDfi(sit)}.`, { size: 16, color: "657D96" })], alignment: D.AlignmentType.CENTER, spacing: { before: 80 }, indent: { left: 900, right: 900 } }));
   if (travail && collab) corps.push(new D.Paragraph({ children: [T(`Validé par ${collab}`, { italics: true })], alignment: D.AlignmentType.CENTER, spacing: { before: 120 } }));
   if (travail) corps.push(new D.Paragraph({ children: [T("Document de travail — usage interne", { color: "A01040", bold: true })], alignment: D.AlignmentType.CENTER, spacing: { before: 600 } }));
   corps.push(new D.Paragraph({ children: [new D.PageBreak()] }));
@@ -1920,7 +1922,6 @@ async function genererWord(version) {
     lignePied(BUREAUX_CABINET.flatMap((b, i) => [...(i ? [T(" • ", { size: 20 })] : []), T(b, { size: 20, bold: true })]), { filet: true, apres: 50 }),
     lignePied([T(ADRESSE_CABINET, { size: 16 })]),
     lignePied([T(COURRIEL_CABINET, { size: 16, underline: {} }), T(` - ${TELEPHONE_CABINET}`, { size: 16 })], { apres: 60 }),
-    lignePied([T(`Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, ${miseAJourDfi(sit)}.`, { size: 14, color: GRIS })]),
     lignePied([T("Page ", { size: 14, color: GRIS }), new D.TextRun({ children: [D.PageNumber.CURRENT], font: "Segoe UI", size: 14, color: GRIS }), T(" / ", { size: 14, color: GRIS }), new D.TextRun({ children: [D.PageNumber.TOTAL_PAGES], font: "Segoe UI", size: 14, color: GRIS })], { apres: 0 }),
   ] });
 
@@ -2000,7 +2001,9 @@ async function genererPdfClient() {
     ] }, layout: filets, margin: [0, ti ? 14 : 0, 0, 0] });                 // changement de section : une ligne
   });
   contenu.push({ text: [dossier ? `Dossier ${dossier}` : "", client].filter(Boolean).join(" — "), alignment: "center", fontSize: 12, margin: [0, 30, 0, 6] });
-  contenu.push({ text: `Établi le ${dateLongue(new Date().toISOString())}`, alignment: "center", pageBreak: "after" });
+  contenu.push({ text: `Établi le ${dateLongue(new Date().toISOString())}`, alignment: "center" });
+  // mention de source DGFiP : une seule fois, sous la date (JFD, 12/10/2026)
+  contenu.push({ text: `Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, ${miseAJourDfi(sit)}.`, alignment: "center", fontSize: 8, color: BLEU_GRIS, margin: [45, 5, 45, 0], pageBreak: "after" });
 
   // --- regroupement commune → section (même ordre que le Word)
   const groupes = new Map();
@@ -2065,7 +2068,6 @@ async function genererPdfClient() {
       { text: BUREAUX_CABINET.flatMap((b, i) => [...(i ? [{ text: " • " }] : []), { text: b, bold: true }]), alignment: "center", fontSize: 10, margin: [0, 9, 0, 3] },
       { text: ADRESSE_CABINET, alignment: "center", fontSize: 8 },
       { text: [{ text: COURRIEL_CABINET, decoration: "underline" }, ` - ${TELEPHONE_CABINET}`], alignment: "center", fontSize: 8, margin: [0, 1, 0, 5] },
-      { text: `Filiation établie d'après les documents de filiation informatisés publiés par la Direction générale des finances publiques, ${miseAJourDfi(sit)}.`, alignment: "center", fontSize: 7, color: BLEU_GRIS, margin: [57, 0, 57, 1] },
       { text: `Page ${page} / ${total}`, alignment: "center", fontSize: 7, color: BLEU_GRIS } ] }),
     content: nettoyerPdf(contenu),
   };

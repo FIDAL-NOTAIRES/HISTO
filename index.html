@@ -2000,9 +2000,14 @@ async function genererWord(version) {
   let sautFinal = null;
   for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
     corps.push(H(`Commune de ${g.nom} — section ${sec}`, D.HeadingLevel.HEADING_1));
-    for (const res of liste) {
+    for (const [ip, res] of liste.entries()) {
       const r = res.reference;
-      corps.push(H(`Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, D.HeadingLevel.HEADING_2));
+      // CHAQUE PARCELLE SUR UNE NOUVELLE PAGE (12/10/2026, JFD : « ça coupe mal entre deux parcelles ») :
+      // le titre ne reste plus seul en bas de page ; il est aussi lié au bloc qui le suit. Pas de saut
+      // en tête d'une section qui commence déjà sur une page neuve (après une page en paysage).
+      corps.push(new D.Paragraph({ heading: D.HeadingLevel.HEADING_2, pageBreakBefore: ip > 0 && corps.length > 0, keepNext: true,
+        spacing: { before: 240, after: 120 },
+        children: [new D.TextRun({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, font: "Georgia", color: NUIT, bold: false, size: 26 })] }));
       const arbre = res.trouve ? await imageArbre(res, travail) : null, posArbre = arbre ? placementArbre(arbre) : null;
       if (posArbre && !posArbre.paysage) corps.push(paragrapheArbre(arbre, posArbre));
       if (!res.trouve) {
@@ -2196,9 +2201,11 @@ async function genererPdfClient() {
   // --- une partie par section
   for (const g of groupes.values()) for (const [sec, liste] of g.sections) {
     contenu.push(suite({ text: `Commune de ${g.nom} — section ${sec}`, style: "h1", pageBreak: "before" }));
-    for (const res of liste) {
+    for (const [ip, res] of liste.entries()) {
       const r = res.reference;
-      contenu.push(suite({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2" }));
+      // chaque parcelle sur une nouvelle page (12/10/2026), comme dans le Word
+      contenu.push(suite({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, style: "h2",
+        ...(ip > 0 ? { pageBreak: "before" } : {}) }));
       const arbre = res.trouve ? await imageArbre(res, false) : null, posArbre = arbre ? placementArbre(arbre) : null;
       if (posArbre && !posArbre.paysage) contenu.push({ image: arbre.png, width: posArbre.largeur * 0.75, alignment: "center", margin: [0, 2, 0, 10] });
       if (!res.trouve) { contenu.push({ text: etatTrente(res).couleur === "vert" ? PHRASE_CLIENT_SANS_VARIATION : "La filiation ne peut être retracée à partir des données cadastrales disponibles.", margin: [0, 0, 0, 8] }); planPdf(r); continue; }

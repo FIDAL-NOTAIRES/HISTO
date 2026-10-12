@@ -8,6 +8,13 @@
 //   - HISTO ne porte JAMAIS les références de publicité foncière (le DFI ne
 //     les contient pas) : l'appelant les ajoute en recoupant l'état hypothécaire ;
 //   - le « depuis la dernière mutation » est un calcul de l'appelant.
+// Contrat 1.1 (12/10/2026) — règle du DÉBUT DE L'INFORMATISATION, ajout du champ
+//   « informatisation » ; aucun champ retiré :
+//   - début il y a PLUS de trente ans → branches sans naissance connue couvertes,
+//     filiation réputée parfaite (trentenaire = true, motif « trentenaire-informatisation »,
+//     ou « aucun-mouvement-depuis-informatisation » pour une parcelle sans mouvement) ;
+//   - début il y a trente ans OU MOINS → arrêt maintenu, l'année est transmise.
+//   Année retenue : celle du plus ancien document de la commune dans le DFI.
 //
 // Le moteur tourne ICI, côté serveur : le navigateur de l'appelant n'envoie
 // qu'une demande et ne reçoit qu'un résultat (premier pas de la sécurisation).
@@ -30,7 +37,7 @@
 //                    elle REMPLACE la liste par défaut — y remettre les trois)
 // ============================================================
 
-const VERSION_CONTRAT = "1.0";
+const VERSION_CONTRAT = "1.1";
 const PREFIXE_FICHIER = "HISTO_";
 const SEUIL_30_ANS = 30;
 const PROFONDEUR_MAX = 60;            // garde-fou contre les boucles
@@ -163,13 +170,16 @@ async function construireIndex(nom, dep, com, jeton) {
   const noter = (r, role) => { const k = `${r.section}-${r.numero}`;
     if (!sansPrefixe.has(k)) sansPrefixe.set(k, new Map());
     const m = sansPrefixe.get(k); m.set(r.prefixe, (m.get(r.prefixe) || new Set()).add(role)); };
+  // début de l'informatisation (12/10/2026) : année du plus ancien document de la commune
+  let debut = null;
+  for (const doc of fichier.docs || []) { const a = doc.date ? +String(doc.date).slice(0, 4) : null; if (a && (debut == null || a < debut)) debut = a; }
   for (const doc of fichier.docs || []) for (const lot of doc.lots || []) {
     for (const c of lot.f || []) { const r = cellule(c, dep, com, lot.pre), k = cleRef(r);
       if (!parFille.has(k)) parFille.set(k, []); parFille.get(k).push({ doc, lot }); noter(r, "fille"); }
     for (const c of lot.m || []) { const r = cellule(c, dep, com, lot.pre), k = cleRef(r);
       if (!parMere.has(k)) parMere.set(k, []); parMere.get(k).push({ doc, lot }); noter(r, "mère"); }
   }
-  return { parFille, parMere, sansPrefixe, situation: fichier.situation || null };
+  return { parFille, parMere, sansPrefixe, situation: fichier.situation || null, debut };
 }
 
 // Parcelle au plan cadastral actuel (IGN) : l'objet, null si inconnue, undefined si service injoignable
@@ -208,8 +218,11 @@ function existence(r, feature, idx) {
   return { code, au_plan_actuel: feature ? true : feature === null ? false : null, autres_prefixes: autres, disparitions };
 }
 
-// Couverture trentenaire branche par branche (règle du 05/10/2026)
-function couverture(maillons) {
+// Couverture trentenaire branche par branche (règle du 05/10/2026),
+// mur de l'informatisation compris (règle du 12/10/2026) : un bout de branche sans
+// naissance connue est né avant le début de l'informatisation ; si ce début remonte
+// à plus de trente ans, la branche est couverte.
+function couverture(maillons, mur) {
   const an = new Date().getFullYear(), nees = new Set(), disparue = new Map(), origines = new Map();
   for (const m of maillons) {
     nees.add(m._cle);
@@ -219,8 +232,9 @@ function couverture(maillons) {
     }
   }
   const bouts = [...origines.keys()].filter(k => !nees.has(k)).map(k => ({ parcelle: origines.get(k), annee: disparue.get(k) }));
-  const arrets = bouts.filter(b => b.annee == null || an - b.annee <= SEUIL_30_ANS).sort((a, b) => (b.annee ?? 9999) - (a.annee ?? 9999));
-  return { bouts, arrets };
+  const arretsBruts = bouts.filter(b => b.annee == null || an - b.annee <= SEUIL_30_ANS).sort((a, b) => (b.annee ?? 9999) - (a.annee ?? 9999));
+  const arrets = mur?.ancien ? [] : arretsBruts;
+  return { bouts, arrets, parMur: !!mur?.ancien && arretsBruts.length > 0 };
 }
 
 // ============================================================
@@ -275,13 +289,15 @@ async function filiation(entree, jeton) {
 
   const ex = existence(racine, feature, idx);
   const trouve = maillons.length > 0;
-  const cv = couverture(maillons);
-  const trentenaire = trouve && cv.arrets.length === 0;
-  const etat = ex.code === "introuvable" || ex.code === "autre-prefixe" ? "carmin"
-             : !trouve ? "jaune" : trentenaire ? "vert" : "jaune";
-  const motif = ex.code === "introuvable" || ex.code === "autre-prefixe" ? "introuvable"
-              : !trouve ? (idx === null ? "commune-non-chargee" : "aucun-mouvement")
-              : trentenaire ? "trentenaire" : "arret-avant-30-ans";
+  const mur = idx?.debut != null ? { annee: idx.debut, ancien: anneeCourante - idx.debut > SEUIL_30_ANS } : null;
+  const cv = couverture(maillons, mur);
+  const sansMouvementCouvert = !trouve && !!mur?.ancien && (ex.code === "plan" || ex.code === "disparue");
+  const trentenaire = (trouve && cv.arrets.length === 0) || sansMouvementCouvert;
+  const introuvable = ex.code === "introuvable" || ex.code === "autre-prefixe";
+  const etat = introuvable ? "carmin" : trentenaire ? "vert" : "jaune";
+  const motif = introuvable ? "introuvable"
+              : !trouve ? (idx === null ? "commune-non-chargee" : sansMouvementCouvert ? "aucun-mouvement-depuis-informatisation" : "aucun-mouvement")
+              : trentenaire ? (cv.parMur ? "trentenaire-informatisation" : "trentenaire") : "arret-avant-30-ans";
   const plusAncien = maillons.reduce((min, m) => m.document.annee != null && (min == null || m.document.annee < min) ? m.document.annee : min, null);
 
   return {
@@ -293,6 +309,7 @@ async function filiation(entree, jeton) {
     etat_dfi: { couleur: etat, motif },
     trentenaire,
     plus_ancien_mouvement: plusAncien,
+    informatisation: mur ? { annee_debut: mur.annee, plus_de_30_ans: mur.ancien, source: "plus ancien document de la commune dans le DFI" } : null,
     arrets: cv.arrets.map(a => ({ parcelle: parcelle(a.parcelle), annee_disparition: a.annee })),
     nombre_maillons: maillons.length,
     arbre: maillons.map(({ _cle, _meres, ...m }, i) => ({ rang: i + 1, ...m })),

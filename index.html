@@ -199,6 +199,15 @@ body.detail-ouvert main{max-width:1320px}
 .lot-ligne .ref{font-family:Georgia,serif;font-size:1.15rem;color:var(--nuit)}
 .lot-ligne .commune{color:#5B6B7B;margin-left:6px}
 .lot-ligne .etat{display:block;font-size:.88rem;color:#5B6B7B;margin-top:2px}
+.lot-ligne{grid-template-columns:auto auto minmax(0,1fr) auto}
+.lot-ligne .coche{width:18px;height:18px;accent-color:var(--canard);cursor:pointer}
+/* PANIER PAINT (02/10/2026, principe du panier de REDPAR) */
+.panier{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;background:#EAF4F5;border:1px solid #9CCBCF;border-radius:10px;padding:10px 14px;margin:0 0 12px;font-size:.92rem;color:#0F2238}
+.panier[hidden]{display:none}
+.panier .prevision{color:#33838B;font-weight:600}
+.panier .prevision.ko{color:#B0124A}
+.panier-plan{margin:0 0 16px;text-align:center}
+.panier-plan img{max-width:100%;border:1px solid #D5DCE3;border-radius:6px}
 .lot-ligne .voir{font-size:.88rem;color:var(--canard);white-space:nowrap}
 .detail-tete{margin:0 0 14px}
 .detail-grille{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;align-items:start}
@@ -320,9 +329,18 @@ body.detail-ouvert main{max-width:1320px}
     <!-- ÉCRAN DE DÉTAIL (12/10/2026, arbitrages vocaux) : la liste d'ensemble du lot, dans un ordre
          fixe (commune, section, numéro), sans tri ni filtre ; un clic ouvre la parcelle — généalogie à
          gauche, plan colorisé en vignette à droite ; un simple bouton de retour à la liste. -->
-    <div id="vue-liste"><div id="liste-resultats"></div></div>
+    <div id="vue-liste">
+      <div class="panier" id="panier" hidden>
+        <span id="panier-texte"></span><span class="prevision" id="panier-prevision"></span>
+        <button class="bouton" id="btn-panier-plan">Plan PAINT de la sélection</button>
+        <button class="bouton secondaire" id="btn-panier-vider">Tout décocher</button>
+      </div>
+      <div class="panier-plan" id="panier-plan"></div>
+      <div id="liste-resultats"></div>
+    </div>
     <div id="vue-detail" hidden>
-      <div class="detail-tete"><button class="bouton secondaire" id="btn-retour-liste">← Retour à la liste</button></div>
+      <div class="detail-tete"><button class="bouton secondaire" id="btn-retour-liste">← Retour à la liste</button>
+        <button class="bouton secondaire" id="btn-word-parcelle">Document de travail de cette parcelle (Word)</button></div>
       <div class="detail-grille">
         <div class="detail-fiche"></div>
         <aside class="detail-plan"><h3>Plan cadastral</h3><div class="vignette-corps"></div></aside>
@@ -1294,6 +1312,7 @@ function afficherResultats(j) {
   j.resultats.forEach(res => { if (res.trouve) res.maillons.forEach((m, i) => { m.num = i + 1; }); majBandeau(res); });
   tracerFrises();
   afficherListe(j);
+  etat.panier = new Set(); contoursCache.clear(); document.getElementById("panier-plan").innerHTML = ""; majPanier();
   if (j.resultats.length === 1) ouvrirDetail(j.resultats[0]);     // une seule parcelle : le détail directement
   else montrerListe();
   document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1315,6 +1334,7 @@ function afficherListe(j) {
     `<p class="lot-entete">${n} parcelle${pl(n, "s")} : ${resume}. Cliquez une parcelle pour voir sa filiation et son plan.</p>`
     + ordre.map((res, i) => { const e = etats[i], r = res.reference;
       return `<div class="lot-ligne ${e.couleur}" role="button" tabindex="0" data-k="${cleRef(r)}">
+        <input type="checkbox" class="coche" data-panier="${cleRef(r)}" aria-label="Ajouter ${echapperHtml(r.libelle)} au plan à la carte" ${etat.panier?.has(cleRef(r)) ? "checked" : ""} ${estIntrouvable(res) ? "disabled" : ""}>
         <span class="pastille ${e.couleur}"></span>
         <span><span class="ref">${echapperHtml(r.libelle)}</span><span class="commune">${echapperHtml(nomCommune(r))}</span>${r.contenance_m2 != null ? surf(r.contenance_m2) : ""}
           <span class="etat">${echapperHtml(e.texte)}</span></span>
@@ -1342,6 +1362,8 @@ function ouvrirDetail(res) {
   document.getElementById("vue-liste").hidden = true;
   document.getElementById("vue-detail").hidden = false;
   document.getElementById("btn-retour-liste").hidden = (etat.resultats?.resultats?.length || 0) <= 1;
+  // un Word de la parcelle seule n'a de sens que dans un lot de plusieurs parcelles
+  document.getElementById("btn-word-parcelle").hidden = (etat.resultats?.resultats?.length || 0) <= 1 || estIntrouvable(res);
   document.body.classList.add("detail-ouvert");
   etat.detail = k;
   tracerFrises();
@@ -1349,17 +1371,89 @@ function ouvrirDetail(res) {
   document.getElementById("vue-detail").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 document.getElementById("liste-resultats").addEventListener("click", ev => {
+  if (ev.target.closest("[data-panier]")) { ev.stopPropagation(); return; }   // la case ne fait que remplir le panier
   const l = ev.target.closest(".lot-ligne"); if (!l) return;
   const res = resultatParCle(l.dataset.k); if (res) ouvrirDetail(res);
 });
 document.getElementById("liste-resultats").addEventListener("keydown", ev => {
   if (ev.key !== "Enter" && ev.key !== " ") return;
+  if (ev.target.closest("[data-panier]")) return;
   const l = ev.target.closest(".lot-ligne"); if (!l) return;
   ev.preventDefault(); const res = resultatParCle(l.dataset.k); if (res) ouvrirDetail(res);
+});
+document.getElementById("btn-word-parcelle").addEventListener("click", () => {
+  const res = etat.detail && resultatParCle(etat.detail); if (res) genererWord("travail", res);
 });
 document.getElementById("btn-retour-liste").addEventListener("click", () => {
   montrerListe();
   document.getElementById("resultats").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+/* ---------- PANIER : PLAN À LA CARTE (02/10/2026) ----------
+   Principe du panier de REDPAR : on coche des parcelles dans la liste d'ensemble, le panier
+   annonce l'ÉCHELLE et le FORMAT prévisionnels du plan, et un bouton fait produire par PAINT
+   UN SEUL plan colorisé de la sélection. Un plan PAINT ne couvre qu'une commune et tient au
+   plus au 1/2 500 : au-delà, le panier le dit et le bouton reste fermé. */
+const contoursCache = new Map();
+async function contoursDe(res) {
+  const k = cleRef(res.reference);
+  if (!contoursCache.has(k)) contoursCache.set(k, contoursSection([res.reference]).then(c => c[0]));
+  return contoursCache.get(k);
+}
+let jetonPanier = 0;
+async function majPanier() {
+  if (!etat.panier) etat.panier = new Set();
+  const sel = [...etat.panier].map(resultatParCle).filter(Boolean);
+  const boite_ = document.getElementById("panier"), prev = document.getElementById("panier-prevision"), btn = document.getElementById("btn-panier-plan");
+  boite_.hidden = !sel.length;
+  if (!sel.length) return;
+  document.getElementById("panier-texte").textContent = `${sel.length} parcelle${sel.length > 1 ? "s" : ""} cochée${sel.length > 1 ? "s" : ""}`;
+  prev.className = "prevision"; prev.textContent = "calcul de l'échelle…"; btn.disabled = true;
+  const jeton = ++jetonPanier;
+  const communes = new Set(sel.map(r => `${r.reference.dep}${r.reference.com}`));
+  if (communes.size > 1) { prev.className = "prevision ko"; prev.textContent = "plusieurs communes : un plan PAINT n'en couvre qu'une"; return; }
+  const cs = (await Promise.all(sel.map(contoursDe))).filter(c => c && c.anneaux && c.anneaux.length);
+  if (jeton !== jetonPanier) return;
+  if (!cs.length) { prev.className = "prevision ko"; prev.textContent = "aucun contour au plan cadastral actuel"; return; }
+  const b = boite(cs.flatMap(c => c.anneaux.flat())), ef = choisirEchelle(b.x1 - b.x0, b.y1 - b.y0);
+  if (!ef) { prev.className = "prevision ko"; prev.textContent = "sélection trop étendue pour un seul plan (au-delà du 1/2 500) : décochez des parcelles"; return; }
+  const [fmt, sens] = ef.format.split("|");
+  prev.textContent = `plan prévisionnel : 1/${Number(ef.echelle).toLocaleString("fr-FR")}, ${fmt} ${sens}${cs.length < sel.length ? ` (${sel.length - cs.length} sans contour, hors plan)` : ""}`;
+  btn.disabled = false;
+}
+document.getElementById("liste-resultats").addEventListener("change", ev => {
+  const c = ev.target.closest("[data-panier]"); if (!c) return;
+  if (!etat.panier) etat.panier = new Set();
+  if (c.checked) etat.panier.add(c.dataset.panier); else etat.panier.delete(c.dataset.panier);
+  majPanier();
+});
+document.getElementById("btn-panier-vider").addEventListener("click", () => {
+  etat.panier = new Set();
+  document.querySelectorAll("#liste-resultats [data-panier]").forEach(c => { c.checked = false; });
+  document.getElementById("panier-plan").innerHTML = "";
+  majPanier();
+});
+document.getElementById("btn-panier-plan").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-panier-plan"), zone = document.getElementById("panier-plan");
+  const sel = [...etat.panier].map(resultatParCle).filter(Boolean);
+  const cs = (await Promise.all(sel.map(contoursDe))).filter(c => c && c.anneaux && c.anneaux.length)
+    .sort((a, b) => String(a.ref.section).localeCompare(String(b.ref.section), "fr") || (+a.ref.numero - +b.ref.numero));
+  if (!cs.length) return;
+  btn.disabled = true;
+  zone.innerHTML = `<p class="vignette-attente">Plan PAINT de la sélection en préparation…</p>`;
+  const commune = nomCommune(sel[0].reference);
+  try {
+    const attente = fileVignettes.then(() =>
+      demanderPlan(parametresPaint(cs, commune), `sélection de ${cs.length} parcelle${cs.length > 1 ? "s" : ""} à ${commune}`));
+    fileVignettes = attente.catch(() => {});
+    const plan = await attente;
+    if (!plan.ok) throw new Error(plan.message || "PAINT n'a pas rendu le plan");
+    const nom = `Plan ${commune} — ${cs.map(c => `${c.ref.section} ${String(c.ref.numero).replace(/^0+/, "")}`).join(", ")}`.replace(/[\\/:*?"<>|]/g, " ").slice(0, 150);
+    zone.innerHTML = `<img alt="Plan colorisé de la sélection" src="${plan.png}">
+      <div class="actions" style="justify-content:center"><a class="bouton secondaire" download="${echapperHtml(nom)}.png" href="${plan.png}">Télécharger le plan (image)</a></div>`;
+  } catch (e) {
+    zone.innerHTML = `<p class="vignette-attente">Plan non obtenu : ${echapperHtml((e && e.message) || String(e))}.</p>`;
+  } finally { btn.disabled = false; }
 });
 
 /* ---------- VIGNETTE DU PLAN ----------
@@ -1888,15 +1982,21 @@ function phraseMaillon(m) {
   return p + ".";
 }
 
-async function genererWord(version) {
+/* EXPORT INDIVIDUALISABLE (02/10/2026) : le Word de travail peut porter sur UNE parcelle
+   du lot (bouton de l'écran de détail), pas seulement sur le lot entier ; même document,
+   mêmes règles, réduit à cette parcelle et à son plan. */
+async function genererWord(version, seule = null) {
   cacherErreur();
   if (!etat.resultats) return montrerErreur("Établissez d'abord la filiation.");
   if (!window.docx) return montrerErreur("La bibliothèque de génération Word n'est pas chargée (réseau ?).");
   const D = window.docx, travail = version === "travail";
-  if (!resultatsUtiles().length) return montrerErreur("Aucune référence du lot n'a été trouvée : vérifiez les références avant de générer le document.");
+  const lot = () => seule ? [seule] : resultatsUtiles();
+  if (!lot().length) return montrerErreur("Aucune référence du lot n'a été trouvée : vérifiez les références avant de générer le document.");
   let plans;
-  try { plans = await assurerPlans(); }
-  catch (e) { montrerErreur(e.message); return; }
+  try {
+    plans = seule ? new Map([[cleRef(seule.reference), await planDeParcelle(seule)]]) : await assurerPlans();
+  }
+  catch (e) { montrerErreur(seule ? `Plan de la parcelle non obtenu (${(e && e.message) || e}). Le document n'est pas généré.` : e.message); return; }
   const dossier = document.getElementById("dossier").value.trim(), client = document.getElementById("client").value.trim(), collab = document.getElementById("collab").value.trim();
   const sit = (await lireFichierDrive(`${PREFIXE_FICHIER}situation.json`).catch(() => null))?.situation;
   const anneeCourante = new Date().getFullYear();
@@ -1920,7 +2020,7 @@ async function genererWord(version) {
 
   // --- regroupement : commune → section → parcelles en ordre numérique (unités foncières : à venir, hors groupe pour l'instant)
   const groupes = new Map();
-  for (const res of resultatsUtiles()) {
+  for (const res of lot()) {
     const r = res.reference, kc = `${r.dep}${r.com}`;
     if (!groupes.has(kc)) groupes.set(kc, { nom: nomCommune(r), dep: r.dep, sections: new Map() });
     const g = groupes.get(kc);
@@ -2107,7 +2207,7 @@ async function genererWord(version) {
   const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `Origine cadastrale — ${nomBase} — ${travail ? "travail" : "client"} — ${new Date().toISOString().slice(0, 10)}.docx`;
+  a.download = `Origine cadastrale — ${nomBase}${seule ? ` — parcelle ${seule.reference.libelle}` : ""} — ${travail ? "travail" : "client"} — ${new Date().toISOString().slice(0, 10)}.docx`.replace(/[\\/:*?"<>|]/g, " ");
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }

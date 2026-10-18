@@ -2011,7 +2011,7 @@ async function genererWord(version, seule = null) {
 
   const T = (text, o = {}) => new D.TextRun({ text, font: "Segoe UI", size: 20, color: NUIT, ...o });
   const P = (text, o = {}) => new D.Paragraph({ children: [T(text, o.run || {})], spacing: { after: 120 }, ...o.par });
-  const H = (text, niveau) => new D.Paragraph({ heading: niveau, children: [new D.TextRun({ text, font: "Georgia", color: NUIT, bold: false, size: niveau === D.HeadingLevel.HEADING_1 ? 32 : 26 })], spacing: { before: 240, after: 120 } });
+  const H = (text, niveau) => new D.Paragraph({ heading: niveau, children: [new D.TextRun({ text, font: "Segoe UI", color: NUIT, bold: true, size: niveau === D.HeadingLevel.HEADING_1 ? 32 : 26 })], spacing: { before: 240, after: 120 } });
   const encadre = (text, fond) => new D.Paragraph({ children: [T(text)], shading: { type: D.ShadingType.CLEAR, fill: fond, color: "auto" }, spacing: { after: 160 }, indent: { left: 200, right: 200 } });
   const cellule = (text, o = {}) => new D.TableCell({ children: [new D.Paragraph({ children: [T(text, { size: 18, ...(o.run || {}) })] })], shading: o.fond ? { type: D.ShadingType.CLEAR, fill: o.fond, color: "auto" } : undefined, margins: { top: 60, bottom: 60, left: 80, right: 80 }, width: o.largeur ? { size: o.largeur, type: D.WidthType.DXA } : undefined });
   // largeurs en vingtièmes de point : page A4 moins marges de 2 cm = 9 638
@@ -2046,7 +2046,7 @@ async function genererWord(version, seule = null) {
         transformation: { width: Math.round(pl.largeur * f), height: Math.round(pl.hauteur * f) } })] })];
   };
   // --- page de garde
-  corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Georgia", size: 56, color: NUIT })], spacing: { before: 1600, after: 400 }, alignment: D.AlignmentType.CENTER }));
+  corps.push(new D.Paragraph({ children: [new D.TextRun({ text: "Origine cadastrale", font: "Segoe UI", bold: true, size: 56, color: NUIT })], spacing: { before: 1600, after: 400 }, alignment: D.AlignmentType.CENTER }));
   // TABLEAU DE DÉSIGNATION (05/10/2026) : à la manière d'un acte — commune, préfixe,
   // section, numéro, lieu-dit, contenance ; UN TABLEAU PAR SECTION, séparés par une
   // ligne ; en version de travail, une PASTILLE par parcelle (vert : origine
@@ -2107,7 +2107,7 @@ async function genererWord(version, seule = null) {
       // en tête d'une section qui commence déjà sur une page neuve (après une page en paysage).
       corps.push(new D.Paragraph({ heading: D.HeadingLevel.HEADING_2, pageBreakBefore: ip > 0 && corps.length > 0, keepNext: true,
         spacing: { before: 240, after: 120 },
-        children: [new D.TextRun({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, font: "Georgia", color: NUIT, bold: false, size: 26 })] }));
+        children: [new D.TextRun({ text: `Parcelle ${r.libelle}${r.contenance_m2 != null ? ` — ${Number(r.contenance_m2).toLocaleString("fr-FR")} m²` : ""}`, font: "Segoe UI", color: NUIT, bold: true, size: 26 })] }));
       const arbre = res.trouve ? await imageArbre(res, travail) : null, posArbre = arbre ? placementArbre(arbre) : null;
       if (posArbre && !posArbre.paysage) corps.push(paragrapheArbre(arbre, posArbre));
       if (!res.trouve) {
@@ -2219,12 +2219,34 @@ async function genererWord(version, seule = null) {
    même contenu que le Word client : page de garde et tableaux de désignation,
    sommaire, une partie par section avec son plan PAINT, phrases rédigées,
    phrase neutre d'arrêt, tableau allégé, papier à en-tête et pied DGFiP.
-   Limite assumée : Georgia et Segoe UI ne sont pas embarquables, le PDF est
-   composé en Roboto (police fournie avec pdfmake).
+   Police (règle du 13/10/2026 : une seule police, titres en gras) : Segoe UI,
+   dont les quatre fichiers sont lus sur le Drive (dossier des polices) au premier
+   PDF de la session et embarqués dans le document. Si le Drive ne répond pas, le
+   PDF est composé en Roboto (police fournie avec pdfmake) et le dit à l'écran.
    ============================================================ */
 document.getElementById("btn-pdf-client").addEventListener("click", () => genererPdfClient());
 function chargerScript(url) {
   return new Promise((ok, ko) => { const sc = document.createElement("script"); sc.src = url; sc.onload = ok; sc.onerror = () => ko(new Error("chargement de " + url)); document.head.appendChild(sc); });
+}
+const POLICES_SEGOE = { normal: ["segoeui.ttf", "1LH1LWfmhXAkU4Td1wLH0UPPhlEHgWtVL"], bold: ["segoeuib.ttf", "1LijCjFTcP9QKxD0or6zRpHUTfdqWjknw"],
+  italics: ["segoeuii.ttf", "1dz5wBoPfuCBnZyE2X44GRIDrFfLRXuwQ"], bolditalics: ["segoeuiz.ttf", "17G22GZm333c5KJj8VdYvgLy5LIILWsuZ"] };
+const ROBOTO_PAR_DEFAUT = { normal: "Roboto-Regular.ttf", bold: "Roboto-Medium.ttf", italics: "Roboto-Italic.ttf", bolditalics: "Roboto-MediumItalic.ttf" };
+let segoePdfPret = null;
+async function segoePdf(pdfMake) {
+  if (pdfMake.fonts?.SegoeUI) return true;
+  if (!segoePdfPret) segoePdfPret = (async () => {
+    const j = await FidalAcces.jeton(); if (!j) throw new Error("pas de jeton Drive");
+    const def = {};
+    await Promise.all(Object.entries(POLICES_SEGOE).map(async ([style, [nom, id]]) => {
+      const rep = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { Authorization: "Bearer " + j } });
+      if (!rep.ok) throw new Error(nom + " : " + rep.status);
+      const octets = new Uint8Array(await rep.arrayBuffer()); let bin = "";
+      for (let i = 0; i < octets.length; i += 0x8000) bin += String.fromCharCode.apply(null, octets.subarray(i, i + 0x8000));
+      pdfMake.vfs[nom] = btoa(bin); def[style] = nom;
+    }));
+    pdfMake.fonts = { Roboto: ROBOTO_PAR_DEFAUT, ...(pdfMake.fonts || {}), SegoeUI: def };   // Roboto reste disponible en repli
+  })();
+  try { await segoePdfPret; return true; } catch (e) { console.warn("Segoe UI indisponible pour le PDF :", e); segoePdfPret = null; return false; }
 }
 async function pdfmakePret() {
   if (window.pdfMake?.createPdf && window.pdfMake.vfs) return window.pdfMake;
@@ -2248,6 +2270,7 @@ async function genererPdfClient() {
   if (!resultatsUtiles().length) return montrerErreur("Aucune référence du lot n'a été trouvée : vérifiez les références avant de générer le document.");
   let pdfMake;
   try { pdfMake = await pdfmakePret(); } catch (e) { return montrerErreur("La bibliothèque PDF n'a pas pu être chargée (réseau ?)."); }
+  const segoe = await segoePdf(pdfMake);   // Segoe UI embarquée ; sinon Roboto, signalé en fin de composition
   let plans;
   try { plans = await assurerPlans(); } catch (e) { return montrerErreur(e.message); }
   const dossier = document.getElementById("dossier").value.trim(), client = document.getElementById("client").value.trim();
@@ -2336,8 +2359,8 @@ async function genererPdfClient() {
   const def = {
     pageSize: "A4", pageMargins: [57, 120, 57, 128],
     info: { title: "Origine cadastrale", creator: "FIDAL Notaires — HISTO" },
-    defaultStyle: { font: "Roboto", fontSize: 10, color: NUIT, lineHeight: 1.15 },
-    styles: { titre: { fontSize: 28, alignment: "center", color: NUIT }, h1: { fontSize: 16, color: NUIT, margin: [0, 0, 0, 10] }, h2: { fontSize: 13, color: NUIT, margin: [0, 10, 0, 6] } },
+    defaultStyle: { font: segoe ? "SegoeUI" : "Roboto", fontSize: 10, color: NUIT, lineHeight: 1.15 },
+    styles: { titre: { fontSize: 28, alignment: "center", color: NUIT, bold: true }, h1: { fontSize: 16, color: NUIT, bold: true, margin: [0, 0, 0, 10] }, h2: { fontSize: 13, color: NUIT, bold: true, margin: [0, 10, 0, 6] } },
     header: (page, total, taille) => ({ margin: [0, 26, 0, 0], stack: [
       { image: logoUrl, width: 188, alignment: "center" },
       { canvas: [{ type: "line", x1: 0, y1: 16, x2: taille.width, y2: 16, lineWidth: 0.75, lineColor: NUIT }] } ] }),
@@ -2351,7 +2374,7 @@ async function genererPdfClient() {
   };
   const nomBase = (client || [...groupes.values()][0]?.nom || "parcelles").replace(/[\\/:*?"<>|]/g, " ").trim();
   pdfMake.createPdf(def).download(`Origine cadastrale — ${nomBase} — client — ${new Date().toISOString().slice(0, 10)}.pdf`);
-  etatPaint("PDF client produit.");
+  etatPaint(segoe ? "PDF client produit." : "PDF client produit, mais la police Segoe UI n'a pas pu être lue sur le Drive : composé en Roboto.");
 }
 
 /* ============================================================

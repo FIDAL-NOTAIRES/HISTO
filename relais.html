@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Relais Drive — FIDAL Notaires</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+body{margin:0;background:#081625;color:#E8EFF5;font:15px/1.5 "Segoe UI",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+main{max-width:30rem;padding:2rem;text-align:center}
+h1{font:normal 1.3rem Georgia,serif;color:#6DD5DC;margin:0 0 1rem}
+button{background:#33838B;color:#fff;border:0;border-radius:6px;padding:.7rem 1.4rem;font:inherit;cursor:pointer}
+button:hover{background:#3d9aa3}
+p{color:#92A6B8}
+.cache{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>Relais de lecture du Drive</h1>
+  <p id="texte">Page technique du cabinet : elle lit le Drive en lecture seule pour le compte d’un outil autorisé.</p>
+  <button id="autoriser" class="cache" type="button">Autoriser la lecture du Drive</button>
+</main>
+<script>
+/* FIDAL Notaires — relais.html (fichier IDENTIQUE dans MORNING et dans HISTO, autonome, sans acces.js).
+   Motif (arbitrage du 21/10/2026) : le client Google du cabinet est plein (10 adresses). Les outils
+   nouveaux n'y sont plus déclarés : ils ouvrent ce relais, logé sur une adresse déjà autorisée, qui
+   demande le jeton Drive et fait la lecture à leur place.
+   Règles :
+   - seules les adresses de ORIGINES peuvent l'appeler (à compléter ICI ET dans l'autre dépôt) ;
+   - deux opérations seulement, en lecture : « chercher » (liste de fichiers) et « lire » (contenu d'un fichier) ;
+   - le jeton n'est JAMAIS transmis à l'outil appelant.
+   Deux façons d'être ouvert : dans un cadre invisible (demande silencieuse), ou dans une petite
+   fenêtre (?fenetre=1) quand l'accord Google manque : un clic sur le bouton ouvre l'écran Google. */
+(function () {
+  'use strict';
+  var ORIGINES = ['https://suivi-pi-orcin.vercel.app'];
+  var CLIENT_ID = '82507767087-kr2q7r67r2m4llj6ftldgr4rc2n24gbu.apps.googleusercontent.com';
+  var SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+  var DRIVE = 'https://www.googleapis.com/drive/v3/';
+  var enFenetre = /[?&]fenetre=1/.test(location.search);
+  var appelant = enFenetre ? window.opener : (window.parent !== window ? window.parent : null);
+  var jeton = null, expireA = 0, enAttente = null;
+
+  function $(id) { return document.getElementById(id); }
+  function envoyer(msg) {
+    if (!appelant) return;
+    msg.fidalRelais = msg.fidalRelais || 'reponse';
+    ORIGINES.forEach(function (o) { try { appelant.postMessage(msg, o); } catch (e) {} });
+  }
+  function pret() {
+    return new Promise(function (res) {
+      (function attendre(n) {
+        if (window.google && google.accounts && google.accounts.oauth2) return res(true);
+        if (n > 60) return res(false);
+        setTimeout(function () { attendre(n + 1); }, 250);
+      })(0);
+    });
+  }
+  function demander(interactif) {
+    return pret().then(function (ok) {
+      if (!ok) return null;
+      return new Promise(function (res) {
+        var fini = false;
+        function fin(v) { if (!fini) { fini = true; res(v); } }
+        var client = google.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID, scope: SCOPE, prompt: interactif ? '' : 'none',
+          callback: function (r) {
+            if (r && r.access_token) {
+              jeton = r.access_token;
+              expireA = Date.now() + (Number(r.expires_in || 3600) - 60) * 1000;
+              fin(jeton);
+            } else fin(null);
+          },
+          error_callback: function () { fin(null); }
+        });
+        client.requestAccessToken();
+        setTimeout(function () { fin(null); }, interactif ? 180000 : 12000);
+      });
+    });
+  }
+  function jetonValide() {
+    if (jeton && Date.now() < expireA) return Promise.resolve(jeton);
+    if (!enAttente) enAttente = demander(false).then(function (j) { enAttente = null; return j; });
+    return enAttente;
+  }
+  function lireDrive(chemin, texte) {
+    return jetonValide().then(function (j) {
+      if (!j) { var e = new Error('accord Google manquant'); e.accord = true; throw e; }
+      return fetch(DRIVE + chemin, { headers: { Authorization: 'Bearer ' + j } }).then(function (r) {
+        if (r.status === 401) { jeton = null; var e = new Error('accord Google expiré'); e.accord = true; throw e; }
+        if (!r.ok) throw new Error('Drive ' + r.status);
+        return texte ? r.text() : r.json();
+      });
+    });
+  }
+  function chiffre(v, def, max) { v = parseInt(v, 10); return isNaN(v) ? def : Math.max(1, Math.min(v, max)); }
+  function operation(m) {
+    if (m.op === 'chercher') {
+      var p = 'files?q=' + encodeURIComponent(String(m.q || ''))
+        + '&fields=' + encodeURIComponent(String(m.fields || 'files(id,name)'))
+        + '&pageSize=' + chiffre(m.pageSize, 100, 1000)
+        + (m.orderBy ? '&orderBy=' + encodeURIComponent(String(m.orderBy)) : '');
+      return lireDrive(p, false);
+    }
+    if (m.op === 'lire') {
+      if (!/^[A-Za-z0-9_-]{10,200}$/.test(String(m.id || ''))) return Promise.reject(new Error('identifiant de fichier invalide'));
+      return lireDrive('files/' + m.id + '?alt=media', true);
+    }
+    return Promise.reject(new Error('opération refusée'));
+  }
+
+  window.addEventListener('message', function (ev) {
+    if (ORIGINES.indexOf(ev.origin) < 0) return;
+    var m = ev.data;
+    if (!m || m.fidalRelais !== 'appel') return;
+    if (m.op === 'fermer') { if (enFenetre) window.close(); return; }
+    operation(m).then(function (resultat) {
+      envoyer({ n: m.n, ok: true, resultat: resultat });
+    }, function (err) {
+      envoyer({ n: m.n, ok: false, erreur: err.message, accord: !!err.accord });
+    });
+  });
+
+  if (!appelant) return;
+  if (enFenetre) {
+    $('texte').textContent = 'SUIVI demande l’accès en lecture seule au Drive du cabinet. Cliquez sur le bouton, puis choisissez votre compte du cabinet.';
+    $('autoriser').classList.remove('cache');
+    $('autoriser').addEventListener('click', function () {
+      $('autoriser').disabled = true;
+      $('texte').textContent = 'Écran Google ouvert…';
+      demander(true).then(function (j) {
+        if (j) { $('texte').textContent = 'Accord donné. Cette fenêtre se fermera d’elle-même.'; $('autoriser').classList.add('cache'); envoyer({ fidalRelais: 'pret', accord: true }); }
+        else { $('texte').textContent = 'L’accord n’a pas été donné. Vous pouvez réessayer.'; $('autoriser').disabled = false; }
+      });
+    });
+  } else {
+    envoyer({ fidalRelais: 'pret' });
+  }
+})();
+</script>
+</body>
+</html>
